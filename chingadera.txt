@@ -1,0 +1,26 @@
+From begrun.c :
+      strcpy(tag[nt], "ViscositySourceScaling");
+      addr[nt] = &All.ViscSource0;
+      id[nt++] = REAL;
+
+      strcpy(tag[nt], "ViscosityDecayLength");
+      addr[nt] = &All.DecayLength;
+      id[nt++] = REAL;
+
+      strcpy(tag[nt], "ViscosityAlphaMin");
+      addr[nt] = &All.AlphaMin;
+      id[nt++] = REAL;
+
+from hydra.c :
+          cs_h = sqrt(GAMMA * SphP[i].Pressure / SphP[i].a2.Density) / PPP[i].Hsml;
+
+	  f = fabs(SphP[i].u.s.a4.DivVel) /
+	    (fabs(SphP[i].u.s.a4.DivVel) + SphP[i].u.s.CurlVel + 0.0001 * cs_h / fac_mu);
+
+	  SphP[i].Dtalpha = -(SphP[i].alpha - All.AlphaMin) * All.DecayTime *
+	    0.5 * SphP[i].MaxSignalVel / (PPP[i].Hsml * fac_mu)
+	    + f * All.ViscSource * DMAX(0.0, -SphP[i].u.s.a4.DivVel);
+
+from begrun.c :
+  All.ViscSource = All.ViscSource0 / log((GAMMA + 1) / (GAMMA - 1));
+  All.DecayTime = 1 / All.DecayLength * sqrt((GAMMA - 1) / 2 * GAMMA);
