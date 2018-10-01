@@ -1,527 +1,212 @@
 /*! \file allvars.c
- *  \brief creates global variables.
- *
- *  This file creates all the global variables that are declared in allvars.h
- *  
- *  To produce 'allvars.c' from 'allvars.h', do the following:
- *
- *     - Erase all #define's
- *     - add #include "allvars.h" 
- *     - delete all keywords 'extern'
- *     - delete all struct definitions enclosed in {...}, e.g.
- *        "extern struct global_data_all_processes {....} All;"
- *        becomes "struct global_data_all_processes All;"
+ *  \brief provides instances of all global variables.
  */
 
+#include <stdio.h>
+#include <gsl/gsl_rng.h>
+#include "tags.h"
 #include "allvars.h"
 
 
-int ThisTask;			/* the local processors  */
-int NTask, PTask;		/* note: NTask = 2^PTask */
+int ThisTask;		/*!< the rank of the local processor */
+int NTask;               /*!< number of processors */
+int PTask;	        /*!< smallest integer such that NTask <= 2^PTask */
 
-double CPUThisRun;
-
-int NumForceUpdate;
-int NumSphUpdate;
-int TimeTreeRoot;
-int RestartFlag;
-int Flag_FullStep;
-int TreeReconstructFlag;
-
-int NumPart;			/* Note: this is the LOCAL processor value */
-int N_gas;			/* Note: this is the LOCAL processor value */
+int NumPart;		/*!< number of particles on the LOCAL processor */
+int N_gas;		/*!< number of gas particles on the LOCAL processor  */
 //Added by JM
-int flag_accretion; /*!< LOCAL flag. If set, domain decomposition will take place */
+int flag_accretion_threshold; /*!< LOCAL flag. If set, domain decomposition will take place */
+int N0;		/*!< 'Original' number of particles on the LOCAL processor - it will change not after each accretion of a particle but after each domain decomposition. */
 //Added by JM
-long long Ntype[6];
-int NtypeLocal[6];
+long long Ntype[6];      /*!< total number of particles of each type */
+int NtypeLocal[6];       /*!< local number of particles of each type */
 
-#ifdef LT_STELLAREVOLUTION
-int N_star;
-#endif
+int NumForceUpdate;      /*!< number of active particles on local processor in current timestep  */
+int NumSphUpdate;        /*!< number of active SPH particles on local processor in current timestep  */
 
-#ifdef SFR
-int Stars_converted;
-
-#ifdef SFR_METALS
-double TotalEnergy;
-double DEnergy_spawned, DEnergy_converted;
-double DEnergy_radiation, DEnergy_promotion;
-double DEnergy_feedback, TotalReservoir;
-
-#ifdef SFR_FEEDBACK
-double ESN;
-int nhot, ncold;
-#endif
-#endif
-#endif
-
-gsl_rng *random_generator;
-
-#ifdef SFR_METALS
-int Flag_phase;
-int Flag_promotion;
-#endif
-
-double CPU_Step[CPU_PARTS];
-char CPU_Symbol[CPU_PARTS] =
-  { '-', '*', '=', ';', '<', '[', '^', ':', '.', '~', '|', '+', '"', '/', '`', ',', '>', '@', '#', '&', '<' };
-char CPU_SymbolImbalance[CPU_PARTS] =
-  { 'a', 't', 'u', 'v', 'b', 'w', 'd', 'r', 'h', 'm', 'n', 'l', 'o', 'p', 's', 'f', 'i', 'g', 'c', 'e', 'z' };
-char CPU_String[CPU_STRING_LEN + 1];
-
-struct topnode_data *TopNodes;
-
-int NTopnodes, NTopleaves;
+double CPUThisRun;	/*!< Sums the CPU time for the process (current submission only) */
 
 
-double TimeOfLastTreeConstruction;
+int RestartFlag;         /*!< taken from command line used to start code. 0 is normal start-up from
+                                     initial conditions, 1 is resuming a run from a set of restart files, while 2
+                                     marks a restart from a snapshot file. */
 
-int *Ngblist;
+char *Exportflag;        /*!< Buffer used for flagging whether a particle needs to be exported to another process */
 
-#ifdef PERIODIC
-FLOAT boxSize_X, boxHalf_X;
-FLOAT boxSize_Y, boxHalf_Y;
-FLOAT boxSize_Z, boxHalf_Z;
-#endif
+int  *Ngblist;           /*!< Buffer to hold indices of neighbours retrieved by the neighbour search routines */
 
-peanokey *DomainKeyBuf;
+int TreeReconstructFlag; /*!< Signals that a new tree needs to be constructed */
 
-peanokey *Key, *KeySorted;
-
-double DomainCorner[3], DomainCenter[3], DomainLen, DomainFac;
-int DomainMyStart, DomainMyLast;
-int *DomainStartList, *DomainEndList;
-
-double *DomainWork;
-int *DomainCount;
-int *DomainCountSph;
-int *DomainTask;
-
-#ifdef LT_STELLAREVOLUTION
-int *DomainCountStar;
-#endif
+int Flag_FullStep;       /*!< This flag signals that the current step involves all particles */
 
 
-int *DomainNodeIndex;
+gsl_rng *random_generator; /*!< the employed random number generator of the GSL library */
 
-struct DomainNODE *DomainMoment;
+double RndTable[RNDTABLE]; /*!< Hold a table with random numbers, refreshed every timestep */
 
 
-FLOAT *DomainHmax;
-FLOAT *DomainTreeNodeLen;
+double DomainCorner[3];    /*!< gives the lower left corner of simulation volume */
+double DomainCenter[3];    /*!< gives the center of simulation volume */
+double DomainLen;          /*!< gives the (maximum) side-length of simulation volume */
+double DomainFac;          /*!< factor used for converting particle coordinates to a Peano-Hilbert mesh covering the simulation volume */
+int    DomainMyStart;      /*!< first domain mesh cell that resides on the local processor */
+int    DomainMyLast;       /*!< last domain mesh cell that resides on the local processor */
+int    *DomainStartList;   /*!< a table that lists the first domain mesh cell for all processors */
+int    *DomainEndList;     /*!< a table that lists the last domain mesh cell for all processors */
+double *DomainWork;        /*!< a table that gives the total "work" due to the particles stored by each processor */
+int    *DomainCount;       /*!< a table that gives the total number of particles held by each processor */
+int    *DomainCountSph;    /*!< a table that gives the total number of SPH particles held by each processor */
+
+int    *DomainTask;        /*!< this table gives for each leaf of the top-level tree the processor it was assigned to */
+int    *DomainNodeIndex;   /*!< this table gives for each leaf of the top-level tree the corresponding node of the gravitational tree */
+FLOAT  *DomainTreeNodeLen; /*!< this table gives for each leaf of the top-level tree the side-length of the corresponding node of the gravitational tree */
+FLOAT  *DomainHmax;        /*!< this table gives for each leaf of the top-level tree the maximum SPH smoothing length among the particles of the corresponding node of the gravitational tree */
+
+struct DomainNODE
+ *DomainMoment;                    /*!< this table stores for each node of the top-level tree corresponding node data from the gravitational tree */
+
+peanokey *DomainKeyBuf;    /*!< this points to a buffer used during the exchange of particle data */
+
+peanokey *Key;             /*!< a table used for storing Peano-Hilbert keys for particles */
+peanokey *KeySorted;       /*!< holds a sorted table of Peano-Hilbert keys for all particles, used to construct top-level tree */
+
+
+int NTopnodes;             /*!< total number of nodes in top-level tree */
+int NTopleaves;            /*!< number of leaves in top-level tree. Each leaf can be assigned to a different processor */
+
+struct topnode_data
+ *TopNodes;                      /*!< points to the root node of the top-level tree */
+
+
+double TimeOfLastTreeConstruction; /*!< holds what it says, only used in connection with FORCETEST */
 
 
 
-double RndTable[RNDTABLE];
+/* variables for input/output, usually only used on process 0 */
 
+char ParameterFile[MAXLEN_FILENAME];  /*!< file name of parameterfile used for starting the simulation */
 
-
-/* variables for input/output ,  usually only used on process 0 
- */
-char ParameterFile[100];
-FILE *FdInfo, *FdEnergy, *FdTimings, *FdCPU, *FdBalance;
+FILE *FdInfo;       /*!< file handle for info.txt log-file. */
+FILE *FdEnergy;     /*!< file handle for energy.txt log-file. */
+FILE *FdTimings;    /*!< file handle for timings.txt log-file. */
+FILE *FdCPU;        /*!< file handle for cpu.txt log-file. */
 //Added by JM
 FILE *FdAccretion;
 //End of Added by JM
-
-#ifdef SFR
-FILE *FdSfr;
-#endif
-
-#ifdef BG_STELLAR_EVOLUTION
-FILE *FdMetGas;			/*!< file handle for metals_gas.txt log-file. */
-FILE *FdMetStars;		/*!< file handle for metals_star.txt log-file. */
-FILE *FdMetSF;			/*!< file handle for metals_sf.txt log-file. */
-FILE *FdMetTot;			/*!< file handle for metals_tot.txt log-file. */
-#endif
-
-#ifdef BLACK_HOLES
-FILE *FdBlackHoles;
-FILE *FdBlackHolesDetails;
-#endif
-
-
-
-#ifdef SFR_METALS
-FILE *FdMphase;
-FILE *FdSNE;
-
-#if defined(SFR_SNI) || defined(SFR_SNII)
-FILE *FdSN;
-#endif
-#ifdef SFR_PROMOTION
-FILE *FdPromotion;
-#endif
-#endif
-
-
 #ifdef FORCETEST
-FILE *FdForceTest;
-#endif
-
-#ifdef XXLINFO
-FILE *FdXXL;
-
-#ifdef MAGNETIC
-double MeanB;
-
-#ifdef TRACEDIVB
-double MaxDivB;
-#endif
-#endif
-#ifdef TIME_DEP_ART_VISC
-double MeanAlpha;
-#endif
-#endif
-
-#ifdef DARKENERGY
-FILE *FdDE;  /*!< file handle for darkenergy.txt log-file. */
+FILE *FdForceTest;  /*!< file handle for forcetest.txt log-file. */
 #endif
 
 
-#ifdef LT_CharT_INFO
-FILE *FdCharT;
-#endif
+double DriftTable[DRIFT_TABLE_LENGTH];      /*!< table for the cosmological drift factors */
+double GravKickTable[DRIFT_TABLE_LENGTH];   /*!< table for the cosmological kick factor for gravitational forces */
+double HydroKickTable[DRIFT_TABLE_LENGTH];  /*!< table for the cosmological kick factor for hydrodynmical forces */
 
-#ifdef LT_STELLAREVOLUTION
+void *CommBuffer;   /*!< points to communication buffer, which is used in the domain decomposition, the
+                                parallel tree-force computation, the SPH routines, etc. */
 
-gsl_error_handler_t *old_error_handler;
-int my_gslstatus;
 
-FILE *FdSnInit, *FdWarn;
 
-gsl_function F;
-int gsl_status;
-gsl_integration_workspace *w;
-
-gsl_interp_accel *accel;
-gsl_spline *spline;
-
-/* ----------------- *
- *   metal species   *
- * ----------------- */
-
-char *MetNames[LT_NMet];
-double MetSolarValues[LT_NMet];
-int Hyd, Hel, Iron, Oxygen, FillEl;
-
-float xclouds;
-int search_for_metalspread;
-
-char SnIaDataFile[300], SnIIDataFile[300], AGBDataFile[300];
-
-#ifdef LT_TRACK_CONTRIBUTES
-unsigned int   Packing_Factor;
-unsigned int   *Power10_Factors, Max_Power10;
-unsigned int   TrackMask;
-float Max_Packed_Int, UnPacking_Factor;
-#endif
-
-/* -------------- *
- *   SF related   *
- * -------------- */
-
-double *PhysDensTh, *FEVP;
-int sfrrate_filenum;
-
-/* -------------- *
- *   Sn related   *
- * -------------- */
-
-struct SDtype SD;
-
-#ifdef LT_SNIa
-/*
- * SnIaData defines the yields for SnIa.
- * we define it as a pointer so that in the future we can easily extend the
- * number of parameters on which they depend (e.g. mass of the system, time).
- * currently they are fixed
+/*! This structure contains data which is the SAME for all tasks (mostly code parameters read from the
+ * parameter file).  Holding this data in a structure is convenient for writing/reading the restart file, and
+ * it allows the introduction of new global variables in a simple way. The only thing to do is to introduce
+ * them into this structure.
  */
-double ***SnIaYields;
-
-/*
- * it is common that yields tables use the same mass array and Z array for
- * all elements. in this case, we simply use IaZbins, IaMbins to store these 
- * common data. otherwise (different mass/Z array for each element), you can
- * just use the already existent Yield structure, just allocating as twice as
- * the amount of memory needed for the yields' value and using half of the
- * memory to store also the array's value. You can also use SnIaY_dim to store
- * the dimensions.
- */
-double **IaZbins, **IaMbins;
-int *IaZbins_dim, *IaMbins_dim, *SnIaY_dim[LT_NMet];
-#endif
-
-#ifdef LT_SNII
-/*
- * the same as for SnIa.
- */
-double ***SnIIYields, **SnIIEj;
-double ***SnII_ShortLiv_Yields;
-double **IIZbins, **IIMbins;
-int *IIZbins_dim, *IIMbins_dim, *SnIIY_dim[LT_NMet];
-double ***SnII_steps;
-int *SnII_Nsteps;
-#ifdef LT_TRACK_CONTRIBUTES
-float ***SnII_ShortLiv_Yield_Contrib;
-#endif
-#endif
-
-#ifdef LT_AGB
-double ***AGBYields, **AGBEj;
-double **AGBZbins, **AGBMbins;
-int *AGBZbins_dim, *AGBMbins_dim, *AGB_dim[LT_NMet];
-#endif
-
-#if defined(LT_AGB) || defined(LT_SnIa)
-double ***LLv_steps;
-int *LLv_Nsteps;
-#endif
-
-char *IMF_Spec_Labels[2]= {"power law", "general"};
-IMF_SPEC IMF_Spec;
-int IsThere_TimeDep_IMF;
-int IsThere_ZDep_IMF;
-
-IMF_Type *IMFs, *IMFp, IMFu;
-int IMFs_dim;
-
-double IMF_func_arg;
-double *IMF_CommBuff;
-
-FILE *FdIMFin, *FdIMF;
-
-
-#ifdef LT_SEv_INFO
-
-/*   temporary   */
-
-/* double delta_Trun, *Tpop_num, *Tpop_mass; */
-/* double *tot_Tpop_num, *tot_Tpop_mass; */
-/* double delta_TCrun, *TCpop_num, *TCpop_mass; */
-/* double *tot_TCpop_num, *tot_TCpop_mass; */
-/* int Trun_size, TCrun_size; */
-/* FILE *FdTrun, *FdTCrun; */
-
-/* ............. */
-
-
-FILE *FdSn, *FdMetals, *FdSnLost, *FdSnDetails;
-
-#ifdef LT_SEvDbg
-FILE *FdMetSumCheck;
-unsigned int FirstID;
-int checkFirstID;
-#endif
-
-#ifdef WINDS
-FILE *FdWinds;
-#endif
-
-#endif
-
-#ifdef LT_SEv_INFO_DETAILS
-double DetailsW[LT_NMet], DetailsWo[LT_NMet];
-#endif
-
-#ifdef LT_EXTEGY_INFO
-FILE *FdExtEgy;
-#endif
-#endif
-
-double DriftTable[DRIFT_TABLE_LENGTH], GravKickTable[DRIFT_TABLE_LENGTH], HydroKickTable[DRIFT_TABLE_LENGTH];
-
-
-void *CommBuffer;		/* communication buffer, used at a number of places */
-
-char *Exportflag;
-
-/* ---==={{( ( METAL COOLING SECTION ) )}}===--- */
-double sphpZ, R;
-double ZTemp[Zlength], Zvalue[8], Lsuthdop[8][Zlength];
-
-#ifdef LT_METAL_COOLING
-/*double ThInst_onset[ZBins] = { 4.9, 4.9, 4.95, 5.35, 5.35, 5.35, 5.35, 5.35 };*/
-double ThInst_onset[ZBins] = { 5, 5, 5, 5.3, 5.3, 5.3, 5.3, 5.3 };
-
-#else
-
-/*double ThInst_onset[ZBins] = { 4.9, 4.9, 4.95, 5.35, 5.35, 5.35, 5.35, 5.35 };*/
-double ThInst_onset[ZBins] = { 5 };
-
-#endif
-/* ---===--- */
-
-/* ---==={{( ( CHEMICAL ENRICHMENT SECTION ) )}}===--- */
-#ifdef LT_STELLAREVOLUTION
-
-float xclouds;
-
-#ifdef LT_SEvDbg
-unsigned int FirstID;
-int checkFirstID;
-#endif
-
-#endif
-/* ---===--- */
-
-
-/* this structure contains data which is the SAME for all 
- * tasks (mostly code parameters read from the parameter file). 
- * Holding this data in a structure is convenient for writing/reading
- * the restart file, and it allows the introduction of new global
- * variables in a simple way. The only thing to do is to introduce them
- * into this structure.
- */
-struct global_data_all_processes All;
+struct global_data_all_processes
+ All;
 
 
 
-/* The following structure holds all the information that is
+/*! This structure holds all the information that is
  * stored for each particle of the simulation.
  */
-struct particle_data *P, *DomainPartBuf;
+struct particle_data
+ *P,              /*!< holds particle data on local processor */
+ *DomainPartBuf;  /*!< buffer for particle data used in domain decomposition */
 
-#ifdef LT_STELLAREVOLUTION
-/* the following struture holds data that is stored for each star particle
- * in addition to the collisionless variables.
+
+/* the following struture holds data that is stored for each SPH particle in addition to the collisionless
+ * variables.
  */
-struct met_particle_data *MetP, *DomainMetBuf;
-#endif
-
-
-/* the following struture holds data that is stored for each SPH particle
- * in addition to the collisionless variables.
- */
-struct sph_particle_data *SphP, *DomainSphBuf;
-
-
-
-
-/* global state of system 
-*/
-struct state_of_system SysState, SysStateAtStart, SysStateAtEnd;
+struct sph_particle_data
+ *SphP,                        	/*!< holds SPH particle data on local processor */
+ *DomainSphBuf;                 /*!< buffer for SPH particle data in domain decomposition */
 
 
 
 
 
-
-/* Various structure for communication during the gravity 
- * computation.
- */
-struct gravdata_in *GravDataIn, *GravDataGet, *GravDataResult, *GravDataOut;
-
-struct gravdata_index *GravDataIndexTable;
-
-#ifdef SFR_METALS
-struct metaldata_in *MetalDataIn, *MetalDataGet;
-#endif
-
-#ifdef BG_SFR
-struct metaldata_in *MetalDataIn, *MetalDataGet;
-#endif
-
-/* Various structure for communication during the density
- * computation.
- */
-struct densdata_in *DensDataIn, *DensDataGet;
-
-#ifdef BG_SFR
-struct solidangledata_in *SolidAngleDataIn, *SolidAngleDataGet;
-struct solidangledata_out *SolidAngleDataResult, *SolidAngleDataPartialResult;
-#endif
-
-
-struct densdata_out *DensDataResult, *DensDataPartialResult;
-
-
-#ifdef BLACK_HOLES
-struct blackholedata_in *BlackholeDataIn, *BlackholeDataGet;
-struct blackholedata_out *BlackholeDataResult, *BlackholeDataPartialResult;
-#endif
-
-
-#ifdef FOF
-struct fofdata_in *FoFDataIn, *FoFDataGet;
-struct fofdata_out *FoFDataResult, *FoFDataPartialResult;
-#endif
-
-
-
-
-/* Various structures for communication during the 
- * computation of hydrodynamical forces.
- */
-struct hydrodata_in *HydroDataIn, *HydroDataGet;
-
-struct hydrodata_out *HydroDataResult, *HydroDataPartialResult;
-
-
-#ifdef SFR_PROMOTION
-struct hotngbs_in *HotNgbsIn, *HotNgbsGet;
-struct hotngbs_out *HotNgbsResult, *HotNgbsPartialResult;
-#endif
-
-#ifdef MHM
-struct kindata_in *KinDataIn, *KinDataGet;
-#endif
-
-#ifdef LT_STELLAREVOLUTION
-struct metal_ngbfindingdata_in *MetalNgbIn, *MetalNgbGet;
-struct metal_ngbfindingdata_out *MetalNgbResultIn, *MetalNgbResultGet;
-struct metaldata_in *MetalDataIn, *MetalDataGet;
-#endif
-
-/* Header for the standard file format.
- */
-struct io_header header;
-
-
-
-/*******************
- ** Variables for Tree
- ********************
+/*  Variables for Tree
  */
 
+int MaxNodes;		/*!< maximum allowed number of internal nodes */
+int Numnodestree;	/*!< number of (internal) nodes in each tree */
 
-struct NODE *Nodes, *Nodes_base;
-
-struct extNODE *Extnodes, *Extnodes_base;
-
-
-int MaxNodes;			/* maximum allowed number of internal nodes */
-int Numnodestree;		/* number of (internal) nodes in each tree */
-
-
-int *Nextnode;			/* gives next node in tree walk  (nodes array) */
-int *Father;			/* gives parent node in tree (Prenodes array) */
+struct NODE
+ *Nodes_base,                   /*!< points to the actual memory allocted for the nodes */
+ *Nodes;                        /*!< this is a pointer used to access the nodes which is shifted such that Nodes[All.MaxPart] 
+ 				     gives the first allocated node */
 
 
-#ifdef STATICNFW
-double Rs, R200;
-double Dc;
-double RhoCrit, V200;
-double fac;
-#endif
+int *Nextnode;	        /*!< gives next node in tree walk */
+int *Father;	        /*!< gives parent node in tree    */
+
+
+struct extNODE           /*!< this structure holds additional tree-node information which is not needed in the actual gravity computation */
+ *Extnodes_base,                /*!< points to the actual memory allocted for the extended node information */
+ *Extnodes;                     /*!< provides shifted access to extended node information, parallel to Nodes/Nodes_base */
 
 
 
-#ifdef CHEMISTRY
-/* ----- Tables ------- */
-double T[N_T], J0_nu[N_nu], J_nu[N_nu], nu[N_nu];
-double k1a[N_T], k2a[N_T], k3a[N_T], k4a[N_T], k5a[N_T], k6a[N_T], k7a[N_T], k8a[N_T], k9a[N_T], k10a[N_T],
-  k11a[N_T];
-double k12a[N_T], k13a[N_T], k14a[N_T], k15a[N_T], k16a[N_T], k17a[N_T], k18a[N_T], k19a[N_T], k20a[N_T],
-  k21a[N_T];
-double ciHIa[N_T], ciHeIa[N_T], ciHeIIa[N_T], ciHeISa[N_T], reHIIa[N_T], brema[N_T];
-double ceHIa[N_T], ceHeIa[N_T], ceHeIIa[N_T], reHeII1a[N_T], reHeII2a[N_T], reHeIIIa[N_T];
 
-/* cross-sections */
-#ifdef RADIATION
-double sigma24[N_nu], sigma25[N_nu], sigma26[N_nu], sigma27[N_nu], sigma28[N_nu], sigma29[N_nu],
-  sigma30[N_nu], sigma31[N_nu];
-#endif
 
-#endif /* chemisitry */
+/*! Header for the standard file format.
+ */
+struct io_header
+ header;  /*!< holds header for snapshot files */
+
+
+
+char Tab_IO_Labels[IO_NBLOCKS][4];   /*<! This table holds four-byte character tags used for fileformat 2 */
+
+
+
+/* global state of system, used for global statistics
+ */
+struct state_of_system
+ SysState;      /*<! Structure for storing some global statistics about the simulation. */
+ 
+
+
+/* Various structures for communication
+ */
+struct gravdata_in
+ *GravDataIn,                   /*!< holds particle data to be exported to other processors */
+ *GravDataGet,                  /*!< holds particle data imported from other processors */
+ *GravDataResult,               /*!< holds the partial results computed for imported particles. Note: We use GravDataResult = GravDataGet, such that the result replaces the imported data */
+ *GravDataOut;                  /*!< holds partial results received from other processors. This will overwrite the GravDataIn array */
+
+struct gravdata_index
+ *GravDataIndexTable;           /*!< the particles to be exported are grouped by task-number. This table allows the results to be disentangled again and to be assigned to the correct particle */
+
+
+
+struct densdata_in
+ *DensDataIn,                   /*!< holds particle data for SPH density computation to be exported to other processors */
+ *DensDataGet;                  /*!< holds imported particle data for SPH density computation */
+
+struct densdata_out
+ *DensDataResult,               /*!< stores the locally computed SPH density results for imported particles */
+ *DensDataPartialResult;        /*!< imported partial SPH density results from other processors */
+
+
+
+struct hydrodata_in
+ *HydroDataIn,                  /*!< holds particle data for SPH hydro-force computation to be exported to other processors */
+ *HydroDataGet;                 /*!< holds imported particle data for SPH hydro-force computation */
+
+struct hydrodata_out
+ *HydroDataResult,              /*!< stores the locally computed SPH hydro results for imported particles */
+ *HydroDataPartialResult;       /*!< imported partial SPH hydro-force results from other processors */
+
+

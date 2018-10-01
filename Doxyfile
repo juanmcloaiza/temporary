@@ -140,16 +140,15 @@ INCLUDE_PATH           =
 INCLUDE_FILE_PATTERNS  = 
 PREDEFINED             = PMGRID \
                          PERIODIC \
-                         COOLING \
-                         SFR \
-                         METALS \
-                         STELLARAGE \
-                         WINDS \
-                         MOREPARAMS \
                          PEANOHILBERT \
                          FORCETEST \
                          WALLCLOCK \
-			 COSMIC_RAYS
+			 HAVE_HDF5 \
+                         MAKEGLASS \
+			 OUTPUTPOTENTIAL \
+			 OUTPUTACCELERATION \
+			 OUTPUTCHANGEOFENTROPY \
+			 OUTPUTTIMESTEP 
 EXPAND_AS_DEFINED      = 
 SKIP_FUNCTION_MACROS   = YES
 #---------------------------------------------------------------------------

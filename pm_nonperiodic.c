@@ -29,11 +29,7 @@
 #define  GRID  (2*PMGRID)
 #define  GRID2 (2*(GRID/2 + 1))
 
-#ifdef FLTROUNDOFFREDUCTION
-#define d_fftw_real DOUBLE
-#else
-#define d_fftw_real fftw_real
-#endif
+
 
 static rfftwnd_mpi_plan fft_forward_plan, fft_inverse_plan;
 
@@ -49,8 +45,6 @@ static int fftsize, maxfftsize;
 
 static fftw_real *kernel[2], *rhogrid, *forcegrid, *workspace;
 static fftw_complex *fft_of_kernel[2], *fft_of_rhogrid;
-static d_fftw_real *d_rhogrid, *d_forcegrid, *d_workspace;
-
 
 /*! This function determines the particle extension of all particles, and for
  *  those types selected with PLACEHIGHRESREGION if this is used, and then
@@ -63,7 +57,7 @@ static d_fftw_real *d_rhogrid, *d_forcegrid, *d_workspace;
  */
 void pm_init_regionsize(void)
 {
-  double meshinner[2], xmin[2][3], xmax[2][3], dmax1, dmax2;
+  double meshinner[2], xmin[2][3], xmax[2][3];
   int i, j, t;
 
   /* find enclosing rectangle */
@@ -94,8 +88,8 @@ void pm_init_regionsize(void)
   for(j = 0; j < 2; j++)
     {
       All.TotalMeshSize[j] = All.Xmaxtot[j][0] - All.Xmintot[j][0];
-      All.TotalMeshSize[j] = DMAX(All.TotalMeshSize[j], All.Xmaxtot[j][1] - All.Xmintot[j][1]);
-      All.TotalMeshSize[j] = DMAX(All.TotalMeshSize[j], All.Xmaxtot[j][2] - All.Xmintot[j][2]);
+      All.TotalMeshSize[j] = dmax(All.TotalMeshSize[j], All.Xmaxtot[j][1] - All.Xmintot[j][1]);
+      All.TotalMeshSize[j] = dmax(All.TotalMeshSize[j], All.Xmaxtot[j][2] - All.Xmintot[j][2]);
 #ifdef ENLARGEREGION
       All.TotalMeshSize[j] *= ENLARGEREGION;
 #endif
@@ -154,7 +148,7 @@ void pm_init_regionsize(void)
 
 	  for(i = 0; i < 3; i++)
 	    {
-	      All.Corner[1][i] = All.Xmintot[1][i] - 1.0001 * (All.Rcut[0] + 2 * All.TotalMeshSize[j] / GRID);
+	      All.Corner[1][i] = All.Xmintot[1][i] - 1.0001 * (All.Rcut[0] + 2 * All.TotalMeshSize[1] / GRID);
 	      All.UpperCorner[1][i] = All.Corner[1][i] + (GRID / 2 - 1) * (All.TotalMeshSize[1] / GRID);
 	    }
 	}
@@ -214,7 +208,7 @@ void pm_init_nonperiodic(void)
 
   MPI_Allreduce(slab_to_task_local, slab_to_task, GRID, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
 
-  slabs_per_task = (int *) mymalloc(NTask * sizeof(int));
+  slabs_per_task = malloc(NTask * sizeof(int));
   MPI_Allgather(&nslab_x, 1, MPI_INT, slabs_per_task, 1, MPI_INT, MPI_COMM_WORLD);
 
 #ifndef PERIODIC
@@ -225,18 +219,18 @@ void pm_init_nonperiodic(void)
     }
 #endif
 
-  first_slab_of_task = (int *) mymalloc(NTask * sizeof(int));
+  first_slab_of_task = malloc(NTask * sizeof(int));
   MPI_Allgather(&slabstart_x, 1, MPI_INT, first_slab_of_task, 1, MPI_INT, MPI_COMM_WORLD);
 
-  meshmin_list = (int *) mymalloc(3 * NTask * sizeof(int));
-  meshmax_list = (int *) mymalloc(3 * NTask * sizeof(int));
+  meshmin_list = malloc(3 * NTask * sizeof(int));
+  meshmax_list = malloc(3 * NTask * sizeof(int));
 
   MPI_Allreduce(&fftsize, &maxfftsize, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
 
   /* now allocate memory to hold the FFT fields */
 
 #if !defined(PERIODIC)
-  if(!(kernel[0] = (fftw_real *) mymalloc(bytes = fftsize * sizeof(fftw_real))))
+  if(!(kernel[0] = (fftw_real *) malloc(bytes = fftsize * sizeof(fftw_real))))
     {
       printf("failed to allocate memory for `FFT-kernel[0]' (%g MB).\n", bytes / (1024.0 * 1024.0));
       endrun(1);
@@ -246,7 +240,7 @@ void pm_init_nonperiodic(void)
 #endif
 
 #if defined(PLACEHIGHRESREGION)
-  if(!(kernel[1] = (fftw_real *) mymalloc(bytes = fftsize * sizeof(fftw_real))))
+  if(!(kernel[1] = (fftw_real *) malloc(bytes = fftsize * sizeof(fftw_real))))
     {
       printf("failed to allocate memory for `FFT-kernel[1]' (%g MB).\n", bytes / (1024.0 * 1024.0));
       endrun(1);
@@ -270,13 +264,13 @@ void pm_init_nonperiodic(void)
 void pm_init_nonperiodic_allocate(int dimprod)
 {
   static int first_alloc = 1;
-  int dimprodmax, imax1, imax2;
+  int dimprodmax;
   double bytes_tot = 0;
   size_t bytes;
 
   MPI_Allreduce(&dimprod, &dimprodmax, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
 
-  if(!(rhogrid = (fftw_real *) mymalloc(bytes = fftsize * sizeof(d_fftw_real))))
+  if(!(rhogrid = (fftw_real *) malloc(bytes = fftsize * sizeof(fftw_real))))
     {
       printf("failed to allocate memory for `FFT-rhogrid' (%g MB).\n", bytes / (1024.0 * 1024.0));
       endrun(1);
@@ -285,14 +279,14 @@ void pm_init_nonperiodic_allocate(int dimprod)
 
   fft_of_rhogrid = (fftw_complex *) rhogrid;
 
-  if(!(forcegrid = (fftw_real *) mymalloc(bytes = IMAX(fftsize, dimprodmax) * sizeof(d_fftw_real))))
+  if(!(forcegrid = (fftw_real *) malloc(bytes = imax(fftsize, dimprodmax) * sizeof(fftw_real))))
     {
       printf("failed to allocate memory for `FFT-forcegrid' (%g MB).\n", bytes / (1024.0 * 1024.0));
       endrun(1);
     }
   bytes_tot += bytes;
 
-  if(!(workspace = (fftw_real *) mymalloc(bytes = IMAX(maxfftsize, dimprodmax) * sizeof(d_fftw_real))))
+  if(!(workspace = (fftw_real *) malloc(bytes = imax(maxfftsize, dimprodmax) * sizeof(fftw_real))))
     {
       printf("failed to allocate memory for `FFT-workspace' (%g MB).\n", bytes / (1024.0 * 1024.0));
       endrun(1);
@@ -305,23 +299,19 @@ void pm_init_nonperiodic_allocate(int dimprod)
       if(ThisTask == 0)
 	printf("\nUsing %g MByte for non-periodic FFT computation.\n\n", bytes_tot / (1024.0 * 1024.0));
     }
-
-  d_rhogrid = (d_fftw_real *) rhogrid;
-  d_forcegrid = (d_fftw_real *) forcegrid;
-  d_workspace = (d_fftw_real *) workspace;
 }
 
 
 /*! This function frees the memory allocated for the non-periodic FFT
- *  computation. (with the exception of the Greens function(s), which are kept
- *  statically in memory for the next force computation)
+ *  computation. (With the exception of the Greens function(s), which are kept
+ *  statically in memory for the next force computation.)
  */
 void pm_init_nonperiodic_free(void)
 {
   /* deallocate memory */
-  myfree(workspace);
-  myfree(forcegrid);
-  myfree(rhogrid);
+  free(workspace);
+  free(forcegrid);
+  free(rhogrid);
 }
 
 
@@ -330,8 +320,8 @@ void pm_init_nonperiodic_free(void)
  */
 void pm_setup_nonperiodic_kernel(void)
 {
-  int i, j, k, x, y, z;
-  double xx, yy, zz, r, u, fac;
+  int i, j, k;
+  double x, y, z, r, u, fac;
   double kx, ky, kz, k2, fx, fy, fz, ff;
   int ip;
 
@@ -347,18 +337,18 @@ void pm_setup_nonperiodic_kernel(void)
     for(j = 0; j < GRID; j++)
       for(k = 0; k < GRID; k++)
 	{
-	  xx = ((double) i) / GRID;
-	  yy = ((double) j) / GRID;
-	  zz = ((double) k) / GRID;
+	  x = ((double) i) / GRID;
+	  y = ((double) j) / GRID;
+	  z = ((double) k) / GRID;
 
-	  if(xx >= 0.5)
-	    xx -= 1.0;
-	  if(yy >= 0.5)
-	    yy -= 1.0;
-	  if(zz >= 0.5)
-	    zz -= 1.0;
+	  if(x >= 0.5)
+	    x -= 1.0;
+	  if(y >= 0.5)
+	    y -= 1.0;
+	  if(z >= 0.5)
+	    z -= 1.0;
 
-	  r = sqrt(xx * xx + yy * yy + zz * zz);
+	  r = sqrt(x * x + y * y + z * z);
 
 	  u = 0.5 * r / (((double) ASMTH) / GRID);
 
@@ -385,18 +375,18 @@ void pm_setup_nonperiodic_kernel(void)
     for(j = 0; j < GRID; j++)
       for(k = 0; k < GRID; k++)
 	{
-	  xx = ((double) i) / GRID;
-	  yy = ((double) j) / GRID;
-	  zz = ((double) k) / GRID;
+	  x = ((double) i) / GRID;
+	  y = ((double) j) / GRID;
+	  z = ((double) k) / GRID;
 
-	  if(xx >= 0.5)
-	    xx -= 1.0;
-	  if(yy >= 0.5)
-	    yy -= 1.0;
-	  if(zz >= 0.5)
-	    zz -= 1.0;
+	  if(x >= 0.5)
+	    x -= 1.0;
+	  if(y >= 0.5)
+	    y -= 1.0;
+	  if(z >= 0.5)
+	    z -= 1.0;
 
-	  r = sqrt(xx * xx + yy * yy + zz * zz);
+	  r = sqrt(x * x + y * y + z * z);
 
 	  u = 0.5 * r / (((double) ASMTH) / GRID);
 
@@ -478,7 +468,7 @@ void pm_setup_nonperiodic_kernel(void)
 
 
 /*! Calculates the long-range non-periodic forces using the PM method.  The
- *  potential is Gaussian filtered with Asmth, given in box units. The
+ *  potential is Gaussian filtered with Asmth, given in mesh-cell units. The
  *  potential is finite differenced using a 4-point finite differencing
  *  formula to obtain the force fields, which are then interpolated to the
  *  particle positions. We carry out a CIC charge assignment, and compute the
@@ -489,10 +479,6 @@ int pmforce_nonperiodic(int grnr)
   double dx, dy, dz;
   double fac, to_slab_fac;
   double re, im, acc_dim;
-
-#ifdef EVALPOTENTIAL
-  double pot;
-#endif
   int i, j, slab, level, sendTask, recvTask, flag, flagsum;
   int x, y, z, xl, yl, zl, xr, yr, zr, xll, yll, zll, xrr, yrr, zrr, ip, dim;
   int slab_x, slab_y, slab_z;
@@ -532,7 +518,7 @@ int pmforce_nonperiodic(int grnr)
 		    {
 		      printf
 			("Particle Id=%d on task=%d with coordinates (%g|%g|%g) lies outside PM mesh.\nStopping\n",
-			 (int) P[i].ID, ThisTask, P[i].Pos[0], P[i].Pos[1], P[i].Pos[2]);
+			 (int)P[i].ID, ThisTask, P[i].Pos[0], P[i].Pos[1], P[i].Pos[2]);
 		      fflush(stdout);
 		    }
 		  flag++;
@@ -550,7 +536,7 @@ int pmforce_nonperiodic(int grnr)
 	    {
 	      for(j = 0; j < 3; j++)
 		{
-		  slab = (int) (to_slab_fac * (P[i].Pos[j] - All.Corner[grnr][j]));
+		  slab = to_slab_fac * (P[i].Pos[j] - All.Corner[grnr][j]);
 
 		  if(slab < meshmin[j])
 		    meshmin[j] = slab;
@@ -580,12 +566,13 @@ int pmforce_nonperiodic(int grnr)
   dimy = meshmax[1] - meshmin[1] + 2;
   dimz = meshmax[2] - meshmin[2] + 2;
 
+
   force_treefree();
 
   pm_init_nonperiodic_allocate((dimx + 4) * (dimy + 4) * (dimz + 4));
 
   for(i = 0; i < dimx * dimy * dimz; i++)
-    d_workspace[i] = 0;
+    workspace[i] = 0;
 
   for(i = 0; i < NumPart; i++)
     {
@@ -596,36 +583,35 @@ int pmforce_nonperiodic(int grnr)
       if(P[i].Pos[2] < All.Corner[grnr][2] || P[i].Pos[2] >= All.UpperCorner[grnr][2])
 	continue;
 
-      slab_x = (int) (to_slab_fac * (P[i].Pos[0] - All.Corner[grnr][0]));
+      slab_x = to_slab_fac * (P[i].Pos[0] - All.Corner[grnr][0]);
       dx = to_slab_fac * (P[i].Pos[0] - All.Corner[grnr][0]) - slab_x;
       slab_x -= meshmin[0];
       slab_xx = slab_x + 1;
 
-      slab_y = (int) (to_slab_fac * (P[i].Pos[1] - All.Corner[grnr][1]));
+      slab_y = to_slab_fac * (P[i].Pos[1] - All.Corner[grnr][1]);
       dy = to_slab_fac * (P[i].Pos[1] - All.Corner[grnr][1]) - slab_y;
       slab_y -= meshmin[1];
       slab_yy = slab_y + 1;
 
-      slab_z = (int) (to_slab_fac * (P[i].Pos[2] - All.Corner[grnr][2]));
+      slab_z = to_slab_fac * (P[i].Pos[2] - All.Corner[grnr][2]);
       dz = to_slab_fac * (P[i].Pos[2] - All.Corner[grnr][2]) - slab_z;
       slab_z -= meshmin[2];
       slab_zz = slab_z + 1;
 
-      d_workspace[(slab_x * dimy + slab_y) * dimz + slab_z] +=
-	P[i].Mass * (1.0 - dx) * (1.0 - dy) * (1.0 - dz);
-      d_workspace[(slab_x * dimy + slab_yy) * dimz + slab_z] += P[i].Mass * (1.0 - dx) * dy * (1.0 - dz);
-      d_workspace[(slab_x * dimy + slab_y) * dimz + slab_zz] += P[i].Mass * (1.0 - dx) * (1.0 - dy) * dz;
-      d_workspace[(slab_x * dimy + slab_yy) * dimz + slab_zz] += P[i].Mass * (1.0 - dx) * dy * dz;
+      workspace[(slab_x * dimy + slab_y) * dimz + slab_z] += P[i].Mass * (1.0 - dx) * (1.0 - dy) * (1.0 - dz);
+      workspace[(slab_x * dimy + slab_yy) * dimz + slab_z] += P[i].Mass * (1.0 - dx) * dy * (1.0 - dz);
+      workspace[(slab_x * dimy + slab_y) * dimz + slab_zz] += P[i].Mass * (1.0 - dx) * (1.0 - dy) * dz;
+      workspace[(slab_x * dimy + slab_yy) * dimz + slab_zz] += P[i].Mass * (1.0 - dx) * dy * dz;
 
-      d_workspace[(slab_xx * dimy + slab_y) * dimz + slab_z] += P[i].Mass * (dx) * (1.0 - dy) * (1.0 - dz);
-      d_workspace[(slab_xx * dimy + slab_yy) * dimz + slab_z] += P[i].Mass * (dx) * dy * (1.0 - dz);
-      d_workspace[(slab_xx * dimy + slab_y) * dimz + slab_zz] += P[i].Mass * (dx) * (1.0 - dy) * dz;
-      d_workspace[(slab_xx * dimy + slab_yy) * dimz + slab_zz] += P[i].Mass * (dx) * dy * dz;
+      workspace[(slab_xx * dimy + slab_y) * dimz + slab_z] += P[i].Mass * (dx) * (1.0 - dy) * (1.0 - dz);
+      workspace[(slab_xx * dimy + slab_yy) * dimz + slab_z] += P[i].Mass * (dx) * dy * (1.0 - dz);
+      workspace[(slab_xx * dimy + slab_y) * dimz + slab_zz] += P[i].Mass * (dx) * (1.0 - dy) * dz;
+      workspace[(slab_xx * dimy + slab_yy) * dimz + slab_zz] += P[i].Mass * (dx) * dy * dz;
     }
 
 
   for(i = 0; i < fftsize; i++)	/* clear local density field */
-    d_rhogrid[i] = 0;
+    rhogrid[i] = 0;
 
   for(level = 0; level < (1 << PTask); level++)	/* note: for level=0, target is the same task */
     {
@@ -669,16 +655,16 @@ int pmforce_nonperiodic(int grnr)
 
 	      if(level > 0)
 		{
-		  MPI_Sendrecv(d_workspace + (sendmin - meshmin[0]) * dimy * dimz,
-			       (sendmax - sendmin + 1) * dimy * dimz * sizeof(d_fftw_real), MPI_BYTE,
-			       recvTask, TAG_NONPERIOD_A, d_forcegrid,
-			       (recvmax - recvmin + 1) * recv_dimy * recv_dimz * sizeof(d_fftw_real),
-			       MPI_BYTE, recvTask, TAG_NONPERIOD_A, MPI_COMM_WORLD, &status);
+		  MPI_Sendrecv(workspace + (sendmin - meshmin[0]) * dimy * dimz,
+			       (sendmax - sendmin + 1) * dimy * dimz * sizeof(fftw_real), MPI_BYTE, recvTask,
+			       TAG_NONPERIOD_A, forcegrid,
+			       (recvmax - recvmin + 1) * recv_dimy * recv_dimz * sizeof(fftw_real), MPI_BYTE,
+			       recvTask, TAG_NONPERIOD_A, MPI_COMM_WORLD, &status);
 		}
 	      else
 		{
-		  memcpy(d_forcegrid, d_workspace + (sendmin - meshmin[0]) * dimy * dimz,
-			 (sendmax - sendmin + 1) * dimy * dimz * sizeof(d_fftw_real));
+		  memcpy(forcegrid, workspace + (sendmin - meshmin[0]) * dimy * dimz,
+			 (sendmax - sendmin + 1) * dimy * dimz * sizeof(fftw_real));
 		}
 
 	      for(slab_x = recvmin; slab_x <= recvmax; slab_x++)
@@ -697,10 +683,10 @@ int pmforce_nonperiodic(int grnr)
 			    {
 			      slab_zz = slab_z;
 
-			      d_rhogrid[GRID * GRID2 * slab_xx + GRID2 * slab_yy + slab_zz] +=
-				d_forcegrid[((slab_x - recvmin) * recv_dimy +
-					     (slab_y - meshmin_list[3 * recvTask + 1])) * recv_dimz +
-					    (slab_z - meshmin_list[3 * recvTask + 2])];
+			      rhogrid[GRID * GRID2 * slab_xx + GRID2 * slab_yy + slab_zz] +=
+				forcegrid[((slab_x - recvmin) * recv_dimy +
+					   (slab_y - meshmin_list[3 * recvTask + 1])) * recv_dimz +
+					  (slab_z - meshmin_list[3 * recvTask + 2])];
 			    }
 			}
 		    }
@@ -709,10 +695,6 @@ int pmforce_nonperiodic(int grnr)
 	}
     }
 
-#ifdef FLTROUNDOFFREDUCTION
-  for(i = 0; i < fftsize; i++)	/* clear local density field */
-    rhogrid[i] = FLT(d_rhogrid[i]);
-#endif
 
   /* Do the FFT of the density field */
 
@@ -799,7 +781,6 @@ int pmforce_nonperiodic(int grnr)
       if(meshmax[j] > GRID / 2 - 3)
 	endrun(131288);
     }
-
 
   for(level = 0; level < (1 << PTask); level++)	/* note: for level=0, target is the same task */
     {
@@ -896,53 +877,6 @@ int pmforce_nonperiodic(int grnr)
   recv_dimz = meshmax[2] - meshmin[2] + 6;
 
 
-
-#ifdef EVALPOTENTIAL
-  for(x = 0; x < meshmax[0] - meshmin[0] + 2; x++)
-    for(y = 0; y < meshmax[1] - meshmin[1] + 2; y++)
-      for(z = 0; z < meshmax[2] - meshmin[2] + 2; z++)
-	{
-	  forcegrid[(x * dimy + y) * dimz + z] =
-	    workspace[((x + 2) * recv_dimy + (y + 2)) * recv_dimz + (z + 2)];
-	}
-
-  for(i = 0; i < NumPart; i++)	/* read out the potential */
-    {
-#ifdef PLACEHIGHRESREGION
-      if(grnr == 1)
-	if(!((1 << P[i].Type) & (PLACEHIGHRESREGION)))
-	  continue;
-#endif
-      slab_x = to_slab_fac * (P[i].Pos[0] - All.Corner[grnr][0]);
-      dx = to_slab_fac * (P[i].Pos[0] - All.Corner[grnr][0]) - slab_x;
-      slab_x -= meshmin[0];
-      slab_xx = slab_x + 1;
-
-      slab_y = to_slab_fac * (P[i].Pos[1] - All.Corner[grnr][1]);
-      dy = to_slab_fac * (P[i].Pos[1] - All.Corner[grnr][1]) - slab_y;
-      slab_y -= meshmin[1];
-      slab_yy = slab_y + 1;
-
-      slab_z = to_slab_fac * (P[i].Pos[2] - All.Corner[grnr][2]);
-      dz = to_slab_fac * (P[i].Pos[2] - All.Corner[grnr][2]) - slab_z;
-      slab_z -= meshmin[2];
-      slab_zz = slab_z + 1;
-
-      pot = forcegrid[(slab_x * dimy + slab_y) * dimz + slab_z] * (1.0 - dx) * (1.0 - dy) * (1.0 - dz);
-      pot += forcegrid[(slab_x * dimy + slab_yy) * dimz + slab_z] * (1.0 - dx) * dy * (1.0 - dz);
-      pot += forcegrid[(slab_x * dimy + slab_y) * dimz + slab_zz] * (1.0 - dx) * (1.0 - dy) * dz;
-      pot += forcegrid[(slab_x * dimy + slab_yy) * dimz + slab_zz] * (1.0 - dx) * dy * dz;
-
-      pot += forcegrid[(slab_xx * dimy + slab_y) * dimz + slab_z] * (dx) * (1.0 - dy) * (1.0 - dz);
-      pot += forcegrid[(slab_xx * dimy + slab_yy) * dimz + slab_z] * (dx) * dy * (1.0 - dz);
-      pot += forcegrid[(slab_xx * dimy + slab_y) * dimz + slab_zz] * (dx) * (1.0 - dy) * dz;
-      pot += forcegrid[(slab_xx * dimy + slab_yy) * dimz + slab_zz] * (dx) * dy * dz;
-
-      P[i].PM_Potential += pot * fac * (2 * All.TotalMeshSize[grnr] / GRID);	/* compensate the finite differencing factor */
-    }
-#endif
-
-
   for(dim = 0; dim < 3; dim++)	/* Calculate each component of the force. */
     {
       /* get the force component by finite differencing the potential */
@@ -998,17 +932,17 @@ int pmforce_nonperiodic(int grnr)
 	    if(!((1 << P[i].Type) & (PLACEHIGHRESREGION)))
 	      continue;
 #endif
-	  slab_x = (int) (to_slab_fac * (P[i].Pos[0] - All.Corner[grnr][0]));
+	  slab_x = to_slab_fac * (P[i].Pos[0] - All.Corner[grnr][0]);
 	  dx = to_slab_fac * (P[i].Pos[0] - All.Corner[grnr][0]) - slab_x;
 	  slab_x -= meshmin[0];
 	  slab_xx = slab_x + 1;
 
-	  slab_y = (int) (to_slab_fac * (P[i].Pos[1] - All.Corner[grnr][1]));
+	  slab_y = to_slab_fac * (P[i].Pos[1] - All.Corner[grnr][1]);
 	  dy = to_slab_fac * (P[i].Pos[1] - All.Corner[grnr][1]) - slab_y;
 	  slab_y -= meshmin[1];
 	  slab_yy = slab_y + 1;
 
-	  slab_z = (int) (to_slab_fac * (P[i].Pos[2] - All.Corner[grnr][2]));
+	  slab_z = to_slab_fac * (P[i].Pos[2] - All.Corner[grnr][2]);
 	  dz = to_slab_fac * (P[i].Pos[2] - All.Corner[grnr][2]) - slab_z;
 	  slab_z -= meshmin[2];
 	  slab_zz = slab_z + 1;
@@ -1029,8 +963,8 @@ int pmforce_nonperiodic(int grnr)
     }
 
   pm_init_nonperiodic_free();
-  force_treeallocate((int) (All.TreeAllocFactor * All.MaxPart), All.MaxPart);
-  All.NumForcesSinceLastDomainDecomp = (long long) (1 + All.TotNumPart * All.TreeDomainUpdateFrequency);
+  force_treeallocate(All.TreeAllocFactor * All.MaxPart, All.MaxPart);
+  All.NumForcesSinceLastDomainDecomp = 1 + All.TotNumPart * All.TreeDomainUpdateFrequency;
 
   if(ThisTask == 0)
     printf("done PM.\n");
@@ -1042,9 +976,9 @@ int pmforce_nonperiodic(int grnr)
 
 
 /*! Calculates the long-range non-periodic potential using the PM method.  The
- *  potential is Gaussian filtered with Asmth, given in box units.  We carry
- *  out a CIC charge assignment, and compute the potenial by Fourier transform
- *  methods. The CIC kernel is deconvolved.
+ *  potential is Gaussian filtered with Asmth, given in mesh-cell units.  We
+ *  carry out a CIC charge assignment, and compute the potenial by Fourier
+ *  transform methods. The CIC kernel is deconvolved.
  */
 int pmpotential_nonperiodic(int grnr)
 {
@@ -1074,7 +1008,8 @@ int pmpotential_nonperiodic(int grnr)
       meshmin[j] = GRID;
       meshmax[j] = 0;
     }
- for(i = 0, flag = 0; i < NumPart; i++)
+
+  for(i = 0, flag = 0; i < NumPart; i++)
     {
 #ifdef PLACEHIGHRESREGION
       if(grnr == 0 || (grnr == 1 && ((1 << P[i].Type) & (PLACEHIGHRESREGION))))
@@ -1130,6 +1065,7 @@ int pmpotential_nonperiodic(int grnr)
     }
 
 
+
   MPI_Allgather(meshmin, 3, MPI_INT, meshmin_list, 3, MPI_INT, MPI_COMM_WORLD);
   MPI_Allgather(meshmax, 3, MPI_INT, meshmax_list, 3, MPI_INT, MPI_COMM_WORLD);
 
@@ -1143,7 +1079,7 @@ int pmpotential_nonperiodic(int grnr)
   pm_init_nonperiodic_allocate((dimx + 4) * (dimy + 4) * (dimz + 4));
 
   for(i = 0; i < dimx * dimy * dimz; i++)
-    d_workspace[i] = 0;
+    workspace[i] = 0;
 
   for(i = 0; i < NumPart; i++)
     {
@@ -1154,36 +1090,35 @@ int pmpotential_nonperiodic(int grnr)
       if(P[i].Pos[2] < All.Corner[grnr][2] || P[i].Pos[2] >= All.UpperCorner[grnr][2])
 	continue;
 
-      slab_x = (int) (to_slab_fac * (P[i].Pos[0] - All.Corner[grnr][0]));
+      slab_x = to_slab_fac * (P[i].Pos[0] - All.Corner[grnr][0]);
       dx = to_slab_fac * (P[i].Pos[0] - All.Corner[grnr][0]) - slab_x;
       slab_x -= meshmin[0];
       slab_xx = slab_x + 1;
 
-      slab_y = (int) (to_slab_fac * (P[i].Pos[1] - All.Corner[grnr][1]));
+      slab_y = to_slab_fac * (P[i].Pos[1] - All.Corner[grnr][1]);
       dy = to_slab_fac * (P[i].Pos[1] - All.Corner[grnr][1]) - slab_y;
       slab_y -= meshmin[1];
       slab_yy = slab_y + 1;
 
-      slab_z = (int) (to_slab_fac * (P[i].Pos[2] - All.Corner[grnr][2]));
+      slab_z = to_slab_fac * (P[i].Pos[2] - All.Corner[grnr][2]);
       dz = to_slab_fac * (P[i].Pos[2] - All.Corner[grnr][2]) - slab_z;
       slab_z -= meshmin[2];
       slab_zz = slab_z + 1;
 
-      d_workspace[(slab_x * dimy + slab_y) * dimz + slab_z] +=
-	P[i].Mass * (1.0 - dx) * (1.0 - dy) * (1.0 - dz);
-      d_workspace[(slab_x * dimy + slab_yy) * dimz + slab_z] += P[i].Mass * (1.0 - dx) * dy * (1.0 - dz);
-      d_workspace[(slab_x * dimy + slab_y) * dimz + slab_zz] += P[i].Mass * (1.0 - dx) * (1.0 - dy) * dz;
-      d_workspace[(slab_x * dimy + slab_yy) * dimz + slab_zz] += P[i].Mass * (1.0 - dx) * dy * dz;
+      workspace[(slab_x * dimy + slab_y) * dimz + slab_z] += P[i].Mass * (1.0 - dx) * (1.0 - dy) * (1.0 - dz);
+      workspace[(slab_x * dimy + slab_yy) * dimz + slab_z] += P[i].Mass * (1.0 - dx) * dy * (1.0 - dz);
+      workspace[(slab_x * dimy + slab_y) * dimz + slab_zz] += P[i].Mass * (1.0 - dx) * (1.0 - dy) * dz;
+      workspace[(slab_x * dimy + slab_yy) * dimz + slab_zz] += P[i].Mass * (1.0 - dx) * dy * dz;
 
-      d_workspace[(slab_xx * dimy + slab_y) * dimz + slab_z] += P[i].Mass * (dx) * (1.0 - dy) * (1.0 - dz);
-      d_workspace[(slab_xx * dimy + slab_yy) * dimz + slab_z] += P[i].Mass * (dx) * dy * (1.0 - dz);
-      d_workspace[(slab_xx * dimy + slab_y) * dimz + slab_zz] += P[i].Mass * (dx) * (1.0 - dy) * dz;
-      d_workspace[(slab_xx * dimy + slab_yy) * dimz + slab_zz] += P[i].Mass * (dx) * dy * dz;
+      workspace[(slab_xx * dimy + slab_y) * dimz + slab_z] += P[i].Mass * (dx) * (1.0 - dy) * (1.0 - dz);
+      workspace[(slab_xx * dimy + slab_yy) * dimz + slab_z] += P[i].Mass * (dx) * dy * (1.0 - dz);
+      workspace[(slab_xx * dimy + slab_y) * dimz + slab_zz] += P[i].Mass * (dx) * (1.0 - dy) * dz;
+      workspace[(slab_xx * dimy + slab_yy) * dimz + slab_zz] += P[i].Mass * (dx) * dy * dz;
     }
 
 
   for(i = 0; i < fftsize; i++)	/* clear local density field */
-    d_rhogrid[i] = 0;
+    rhogrid[i] = 0;
 
   for(level = 0; level < (1 << PTask); level++)	/* note: for level=0, target is the same task */
     {
@@ -1227,16 +1162,16 @@ int pmpotential_nonperiodic(int grnr)
 
 	      if(level > 0)
 		{
-		  MPI_Sendrecv(d_workspace + (sendmin - meshmin[0]) * dimy * dimz,
-			       (sendmax - sendmin + 1) * dimy * dimz * sizeof(d_fftw_real), MPI_BYTE,
-			       recvTask, TAG_NONPERIOD_C, d_forcegrid,
-			       (recvmax - recvmin + 1) * recv_dimy * recv_dimz * sizeof(d_fftw_real),
-			       MPI_BYTE, recvTask, TAG_NONPERIOD_C, MPI_COMM_WORLD, &status);
+		  MPI_Sendrecv(workspace + (sendmin - meshmin[0]) * dimy * dimz,
+			       (sendmax - sendmin + 1) * dimy * dimz * sizeof(fftw_real), MPI_BYTE, recvTask,
+			       TAG_NONPERIOD_C, forcegrid,
+			       (recvmax - recvmin + 1) * recv_dimy * recv_dimz * sizeof(fftw_real), MPI_BYTE,
+			       recvTask, TAG_NONPERIOD_C, MPI_COMM_WORLD, &status);
 		}
 	      else
 		{
-		  memcpy(d_forcegrid, d_workspace + (sendmin - meshmin[0]) * dimy * dimz,
-			 (sendmax - sendmin + 1) * dimy * dimz * sizeof(d_fftw_real));
+		  memcpy(forcegrid, workspace + (sendmin - meshmin[0]) * dimy * dimz,
+			 (sendmax - sendmin + 1) * dimy * dimz * sizeof(fftw_real));
 		}
 
 	      for(slab_x = recvmin; slab_x <= recvmax; slab_x++)
@@ -1255,10 +1190,10 @@ int pmpotential_nonperiodic(int grnr)
 			    {
 			      slab_zz = slab_z;
 
-			      d_rhogrid[GRID * GRID2 * slab_xx + GRID2 * slab_yy + slab_zz] +=
-				d_forcegrid[((slab_x - recvmin) * recv_dimy +
-					     (slab_y - meshmin_list[3 * recvTask + 1])) * recv_dimz +
-					    (slab_z - meshmin_list[3 * recvTask + 2])];
+			      rhogrid[GRID * GRID2 * slab_xx + GRID2 * slab_yy + slab_zz] +=
+				forcegrid[((slab_x - recvmin) * recv_dimy +
+					   (slab_y - meshmin_list[3 * recvTask + 1])) * recv_dimz +
+					  (slab_z - meshmin_list[3 * recvTask + 2])];
 			    }
 			}
 		    }
@@ -1267,10 +1202,6 @@ int pmpotential_nonperiodic(int grnr)
 	}
     }
 
-#ifdef FLTROUNDOFFREDUCTION
-  for(i = 0; i < fftsize; i++)	/* clear local density field */
-    rhogrid[i] = FLT(d_rhogrid[i]);
-#endif
 
   /* Do the FFT of the density field */
 
@@ -1471,17 +1402,17 @@ int pmpotential_nonperiodic(int grnr)
 	if(!((1 << P[i].Type) & (PLACEHIGHRESREGION)))
 	  continue;
 #endif
-      slab_x = (int) (to_slab_fac * (P[i].Pos[0] - All.Corner[grnr][0]));
+      slab_x = to_slab_fac * (P[i].Pos[0] - All.Corner[grnr][0]);
       dx = to_slab_fac * (P[i].Pos[0] - All.Corner[grnr][0]) - slab_x;
       slab_x -= meshmin[0];
       slab_xx = slab_x + 1;
 
-      slab_y = (int) (to_slab_fac * (P[i].Pos[1] - All.Corner[grnr][1]));
+      slab_y = to_slab_fac * (P[i].Pos[1] - All.Corner[grnr][1]);
       dy = to_slab_fac * (P[i].Pos[1] - All.Corner[grnr][1]) - slab_y;
       slab_y -= meshmin[1];
       slab_yy = slab_y + 1;
 
-      slab_z = (int) (to_slab_fac * (P[i].Pos[2] - All.Corner[grnr][2]));
+      slab_z = to_slab_fac * (P[i].Pos[2] - All.Corner[grnr][2]);
       dz = to_slab_fac * (P[i].Pos[2] - All.Corner[grnr][2]) - slab_z;
       slab_z -= meshmin[2];
       slab_zz = slab_z + 1;
@@ -1496,12 +1427,12 @@ int pmpotential_nonperiodic(int grnr)
       pot += forcegrid[(slab_xx * dimy + slab_y) * dimz + slab_zz] * (dx) * (1.0 - dy) * dz;
       pot += forcegrid[(slab_xx * dimy + slab_yy) * dimz + slab_zz] * (dx) * dy * dz;
 
-      P[i].p.Potential += pot;
+      P[i].Potential += pot;
     }
 
   pm_init_nonperiodic_free();
-  force_treeallocate((int) (All.TreeAllocFactor * All.MaxPart), All.MaxPart);
-  All.NumForcesSinceLastDomainDecomp = (long long) (1 + All.TotNumPart * All.TreeDomainUpdateFrequency);
+  force_treeallocate(All.TreeAllocFactor * All.MaxPart, All.MaxPart);
+  All.NumForcesSinceLastDomainDecomp = 1 + All.TotNumPart * All.TreeDomainUpdateFrequency;
 
   if(ThisTask == 0)
     printf("done PM-potential.\n");

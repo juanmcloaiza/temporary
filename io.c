@@ -15,32 +15,20 @@
 
 
 /*! \file io.c
- *  \brief Output of a snapshot file to disk.
+ *  \brief Routines for producing a snapshot file on disk.
  */
 
 static int n_type[6];
 static long long ntot_type_all[6];
 
-#ifdef LT_SEvDbg
-double metals[2 * LT_NMetP + 3], tot_metals[2 * LT_NMetP + 3];
-#endif
-
-#ifdef LT_SEv_INFO_DETAILS
-double DetailsWSum[LT_NMetP], DetailsWoSum[LT_NMetP];
-double my_weight_sum_details, My_weight_sum_details;
-unsigned int *my_weight_sum_details_N;
-#endif
 
 
-#ifdef LT_SMOOTH_Z
-void Spy_Z_Smoothing(int);
-#endif
 
 /*! This function writes a snapshot of the particle distribution to one or
- * several files using Gadget's default file format.  If
- * NumFilesPerSnapshot>1, the snapshot is distributed into several files,
- * which are written simultaneously. Each file contains data from a group of
- * processors of size roughly NTask/NumFilesPerSnapshot.
+ *  several files using the selected file format.  If NumFilesPerSnapshot>1,
+ *  the snapshot is distributed onto several files, several of them can be
+ *  written simultaneously (up to NumFilesWrittenInParallel). Each file
+ *  contains data from a group of processors.
  */
 void savepositions(int num)
 {
@@ -48,30 +36,15 @@ void savepositions(int num)
   char buf[500];
   int i, j, *temp, n, filenr, gr, ngroups, masterTask, lastTask;
 
+  t0 = second();
+
   if(ThisTask == 0)
     printf("\nwriting snapshot file... \n");
 
-#ifdef HPM
-  n = All.Ti_Current;		/* to save the value of All.Ti_Current */
-  All.Ti_Current = P[0].Ti_endstep;
-  All.NumForcesSinceLastDomainDecomp = All.TotNumPart * All.TreeDomainUpdateFrequency + 1;
-  DomainDecomposition();
-  ngb_treebuild();
-  density();
-  for(i = 0; i < N_gas; i++)
-    {
-      SphP[i].Entropy =
-	All.HPM_P0 * pow(SphP[i].Density / All.HPM_rho0, All.HPM_alpha) / pow(SphP[i].Density, GAMMA);
-    }
-  All.Ti_Current = n;
-#endif
-
-  t0 = second();
-
-#if defined(SFR) || defined(BLACK_HOLES) || defined(MYSWITCH)
+#if defined(SFR) || defined(BLACK_HOLES)
   rearrange_particle_sequence();
   /* ensures that new tree will be constructed */
-  All.NumForcesSinceLastDomainDecomp = (long long) (1 + All.TreeDomainUpdateFrequency * All.TotNumPart);
+  All.NumForcesSinceLastDomainDecomp = 1 + All.TreeDomainUpdateFrequency * All.TotNumPart;
 #endif
 
   if(NTask < All.NumFilesPerSnapshot)
@@ -106,7 +79,7 @@ void savepositions(int num)
   /* because ntot_type_all[] is of type `long long', we cannot do a simple
    * MPI_Allreduce() to sum the total particle numbers 
    */
-  temp = (int *) mymalloc(NTask * 6 * sizeof(int));
+  temp = malloc(NTask * 6 * sizeof(int));
   MPI_Allgather(n_type, 6, MPI_INT, temp, 6, MPI_INT, MPI_COMM_WORLD);
   for(i = 0; i < 6; i++)
     {
@@ -114,38 +87,18 @@ void savepositions(int num)
       for(j = 0; j < NTask; j++)
 	ntot_type_all[i] += temp[j * 6 + i];
     }
-  myfree(temp);
-
-#ifdef LT_SEvDbg
-  for(i = 0; i < 2 * LT_NMetP + 3; i++)
-    metals[i] = tot_metals[i] = 0;
-#endif
-
-#ifdef LT_SEv_INFO_DETAILS
-  MPI_Reduce(DetailsW, DetailsWSum, LT_NMetP, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-  MPI_Reduce(DetailsWo, DetailsWoSum, LT_NMetP, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-
-  if(ThisTask == 0)
-    for(i = 0; i < LT_NMetP; i++)
-      printf("%g DETAILS: %4s :: %12.8g  *  %12.8g\n", All.Time, MetNames[i], DetailsWSum[i], DetailsWoSum[i]);
-#endif
+  free(temp);
 
 
   /* assign processors to output files */
   distribute_file(All.NumFilesPerSnapshot, 0, 0, NTask - 1, &filenr, &masterTask, &lastTask);
 
+  fill_Tab_IO_Labels();
+
   if(All.NumFilesPerSnapshot > 1)
     sprintf(buf, "%s%s_%03d.%d", All.OutputDir, All.SnapshotFileBase, num, filenr);
   else
     sprintf(buf, "%s%s_%03d", All.OutputDir, All.SnapshotFileBase, num);
-
-#if defined(LT_VAR_IMF)
-  if(All.SFTh_Zdep)
-    write_eff_model(num);
-#endif
-#ifdef LT_SMOOTH_Z
-  Spy_Z_Smoothing(num);
-#endif
 
   ngroups = All.NumFilesPerSnapshot / All.NumFilesWrittenInParallel;
   if((All.NumFilesPerSnapshot % All.NumFilesWrittenInParallel))
@@ -165,44 +118,18 @@ void savepositions(int num)
   t1 = second();
 
   All.CPU_Snapshot += timediff(t0, t1);
-  CPU_Step[CPU_SNAPSHOT] += timediff(t0, t1);
 
-#ifdef FOF
-  t0 = second();
-  if(ThisTask == 0)
-    printf("\ncomputing group catalogue...\n");
-
-  fof_fof(num);
-
-  if(ThisTask == 0)
-    printf("done with group catalogue.\n");
-
-  t1 = second();
-  All.CPU_Snapshot += timediff(t0, t1);
-  CPU_Step[CPU_FOF] += timediff(t0, t1);
-#endif
-#ifdef LT_SEvDbg
-  MPI_Reduce(&metals[0], &tot_metals[0], 2 * LT_NMetP + 3, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-  if(ThisTask == 0)
-    {
-      fprintf(FdMetSumCheck, "@.@ %g ", All.Time);
-      for(i = 0; i < LT_NMetP * 2 + 3; i++)
-	fprintf(FdMetSumCheck, " %g ", tot_metals[i] / All.HubbleParam);
-      fprintf(FdMetSumCheck, " \n ");
-    }
-#endif
 }
 
 
 
-/*! This function fills the write buffer with particle data. New output blocks can in
- *  principle be added here.
+/*! This function fills the write buffer with particle data. New output blocks
+ *  can in principle be added here.
  */
 void fill_write_buffer(enum iofields blocknr, int *startindex, int pc, int type)
 {
   int n, k, pindex;
   float *fp;
-  double dmax1, dmax2;
 
 #ifdef LONGIDS
   long long *ip;
@@ -218,19 +145,6 @@ void fill_write_buffer(enum iofields blocknr, int *startindex, int pc, int type)
 #endif
   double dt_gravkick, dt_hydrokick, a3inv = 1, fac1, fac2;
 
-#if defined(COOLING) && !defined(BG_COOLING)
-  double ne, nh0, nHeII;
-#endif
-#ifdef OUTPUTCOOLRATE
-  double tcool, u;
-#endif
-
-#ifdef LT_STELLAREVOLUTION
-  int control[LT_NMetP];
-#ifdef LT_TRACK_CONTRIBUTES
-  Contrib *contrib;
-#endif
-#endif
 
   if(All.ComovingIntegrationOn)
     {
@@ -253,11 +167,8 @@ void fill_write_buffer(enum iofields blocknr, int *startindex, int pc, int type)
 
 
 
-  fp = (float *) CommBuffer;
-  ip = (int *) CommBuffer;
-#ifdef LT_TRACK_CONTRIBUTES
-  contrib = (Contrib*) CommBuffer;
-#endif
+  fp = CommBuffer;
+  ip = CommBuffer;
 
   pindex = *startindex;
 
@@ -318,9 +229,9 @@ void fill_write_buffer(enum iofields blocknr, int *startindex, int pc, int type)
 
 	    for(k = 0; k < 3; k++)
 	      {
-		fp[k] = P[pindex].Vel[k] + P[pindex].g.GravAccel[k] * dt_gravkick;
+		fp[k] = P[pindex].Vel[k] + P[pindex].GravAccel[k] * dt_gravkick;
 		if(P[pindex].Type == 0)
-		  fp[k] += SphP[pindex].a.HydroAccel[k] * dt_hydrokick;
+		  fp[k] += SphP[pindex].HydroAccel[k] * dt_hydrokick;
 	      }
 #ifdef PMGRID
 	    for(k = 0; k < 3; k++)
@@ -360,8 +271,8 @@ void fill_write_buffer(enum iofields blocknr, int *startindex, int pc, int type)
 	    *fp++ = SphP[pindex].Entropy;
 #else
 	    *fp++ =
-	      DMAX(All.MinEgySpec,
-		   SphP[pindex].Entropy / GAMMA_MINUS1 * pow(SphP[pindex].a2.Density * a3inv, GAMMA_MINUS1));
+	      dmax(All.MinEgySpec,
+		   SphP[pindex].Entropy / GAMMA_MINUS1 * pow(SphP[pindex].Density * a3inv, GAMMA_MINUS1));
 #endif
 	    n++;
 	  }
@@ -371,200 +282,27 @@ void fill_write_buffer(enum iofields blocknr, int *startindex, int pc, int type)
       for(n = 0; n < pc; pindex++)
 	if(P[pindex].Type == type)
 	  {
-	    *fp++ = SphP[pindex].a2.Density;
+	    *fp++ = SphP[pindex].Density;
 	    n++;
 	  }
       break;
-
-    case IO_NE:		/* electron abundance */
-#ifdef COOLING
-#ifndef BG_COOLING
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].Ne;
-	    n++;
-	  }
-#endif
-#endif
-      break;
-
-    case IO_NH:		/* neutral hydrogen fraction */
-#ifdef COOLING
-#ifndef BG_COOLING
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    ne = SphP[pindex].Ne;
-
-	    AbundanceRatios(DMAX(All.MinEgySpec,
-				 SphP[pindex].Entropy / GAMMA_MINUS1 * pow(SphP[pindex].a2.Density *
-									   a3inv,
-									   GAMMA_MINUS1)),
-			    SphP[pindex].a2.Density * a3inv, &ne, &nh0, &nHeII);
-
-	    *fp++ = nh0;
-	    n++;
-	  }
-#endif
-#endif
-      break;
-
-#ifdef CHEMISTRY
-    case IO_ELECT:		/* electron abundance */
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].elec;
-	    n++;
-	  }
-      break;
-
-    case IO_HI:		/* neutral hydrogen abundance */
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].HI;
-	    n++;
-	  }
-      break;
-
-    case IO_HII:		/* ionized hydrogen abundance */
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].HII;
-	    n++;
-	  }
-      break;
-
-    case IO_HeI:		/* neutral Helium */
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].HeI;
-	    n++;
-	  }
-      break;
-
-    case IO_HeII:		/* ionized Heluum */
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].HeII;
-	    n++;
-	  }
-      break;
-
-    case IO_HeIII:		/* double ionised Helium */
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].HeIII;
-	    n++;
-	  }
-      break;
-
-    case IO_H2I:		/* H2 molecule */
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].H2I;
-	    n++;
-	  }
-      break;
-
-    case IO_H2II:		/* ionised H2 molecule */
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].H2II;
-	    n++;
-	  }
-      break;
-
-    case IO_HM:		/* H minus */
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].HM;
-	    n++;
-	  }
-      break;
-#else
-    case IO_ELECT:
-    case IO_HI:
-    case IO_HII:
-    case IO_HeI:
-    case IO_HeII:
-    case IO_HeIII:
-    case IO_H2I:
-    case IO_H2II:
-    case IO_HM:
-      break;
-#endif
 
     case IO_HSML:		/* SPH smoothing length */
       for(n = 0; n < pc; pindex++)
 	if(P[pindex].Type == type)
 	  {
-	    *fp++ = PPP[pindex].Hsml;
+	    *fp++ = SphP[pindex].Hsml;
 	    n++;
 	  }
       break;
 
-    case IO_SFR:		/* star formation rate */
-#ifdef SFR
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = get_starformation_rate(pindex);
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_AGE:		/* stellar formation time */
-#ifdef STELLARAGE
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = P[pindex].StellarAge;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_Z:			/* gas and star metallicity */
-#ifdef METALS
-#ifndef SFR_METALS
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = P[pindex].Metallicity;
-	    n++;
-	  }
-#else
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    if(P[pindex].Zm[0] <= 0 || P[pindex].Zm[6] <= 0)
-	      printf("io2 H=%7.3e, He=%7.3e\n", P[pindex].Zm[6], P[pindex].Zm[0]);
-
-	    for(k = 0; k < 12; k++)
-	      *fp++ = P[pindex].Zm[k];
-	    n++;
-	  }
-#endif
-#endif
-      break;
 
     case IO_POT:		/* gravitational potential */
 #ifdef OUTPUTPOTENTIAL
       for(n = 0; n < pc; pindex++)
 	if(P[pindex].Type == type)
 	  {
-	    *fp++ = P[pindex].p.Potential;
+	    *fp++ = P[pindex].Potential;
 	    n++;
 	  }
 #endif
@@ -576,14 +314,14 @@ void fill_write_buffer(enum iofields blocknr, int *startindex, int pc, int type)
 	if(P[pindex].Type == type)
 	  {
 	    for(k = 0; k < 3; k++)
-	      fp[k] = fac1 * P[pindex].g.GravAccel[k];
+	      fp[k] = fac1 * P[pindex].GravAccel[k];
 #ifdef PMGRID
 	    for(k = 0; k < 3; k++)
 	      fp[k] += fac1 * P[pindex].GravPM[k];
 #endif
 	    if(P[pindex].Type == 0)
 	      for(k = 0; k < 3; k++)
-		fp[k] += fac2 * SphP[pindex].a.HydroAccel[k];
+		fp[k] += fac2 * SphP[pindex].HydroAccel[k];
 	    fp += 3;
 	    n++;
 	  }
@@ -595,57 +333,7 @@ void fill_write_buffer(enum iofields blocknr, int *startindex, int pc, int type)
       for(n = 0; n < pc; pindex++)
 	if(P[pindex].Type == type)
 	  {
-	    *fp++ = SphP[pindex].e.DtEntropy;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_STRESSDIAG:         /* Diagonal components of viscous shear tensor */
-#ifdef OUTPUTSTRESS
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    for(k = 0; k < 3; k++)
-	      fp[k] = SphP[pindex].u.s.StressDiag[k];
-	    fp += 3;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_STRESSOFFDIAG:      /* Offdiagonal components of viscous shear tensor */
-#ifdef OUTPUTSTRESS
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    for(k = 0; k < 3; k++)
-	      fp[k] = SphP[pindex].u.s.StressOffDiag[k];
-	    fp += 3;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_STRESSBULK:         /* Viscous bulk tensor */
-#ifdef OUTPUTBULKSTRESS
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].u.s.StressBulk;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_SHEARCOEFF:         /* Shear viscosity coefficient */
-#ifdef OUTPUTSHEARCOEFF
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = get_shear_viscosity(pindex) * 
-	      pow( (SphP[pindex].Entropy * pow(SphP[pindex].a2.Density * a3inv, 
-					     GAMMA_MINUS1) / GAMMA_MINUS1), 2.5);
+	    *fp++ = SphP[pindex].DtEntropy;
 	    n++;
 	  }
 #endif
@@ -663,448 +351,6 @@ void fill_write_buffer(enum iofields blocknr, int *startindex, int pc, int type)
 #endif
       break;
 
-    case IO_BFLD:		/* magnetic field  */
-#ifdef MAGNETIC
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    for(k = 0; k < 3; k++)
-	      *fp++ = SphP[pindex].BPred[k];
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_DBDT:		/* rate of change of magnetic field  */
-#ifdef DBOUTPUT
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    for(k = 0; k < 3; k++)
-	      *fp++ = SphP[pindex].DtB[k];
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_DIVB:		/* divergence of magnetic field  */
-#ifdef TRACEDIVB
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].divB;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_ABVC:		/* artificial viscosity of particle  */
-#ifdef TIME_DEP_ART_VISC
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].alpha;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_AMDC:		/* artificial viscosity of particle  */
-#ifdef TIME_DEP_MAGN_DISP
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].Balpha;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_PHI:		/* divBcleaning fuction of particle  */
-#ifdef DIVBCLEANING_DEDNER
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].PhiPred;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_COOLRATE:		/* current cooling rate of particle  */
-#ifdef OUTPUTCOOLRATE
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    ne = SphP[pindex].Ne;
-
-	    /* get cooling time */
-	    u = SphP[pindex].Entropy / GAMMA_MINUS1 * pow(SphP[pindex].a2.Density * a3inv, GAMMA_MINUS1);
-
-	    tcool = GetCoolingTime(u, SphP[pindex].a2.Density * a3inv, &ne);
-
-	    /* convert cooling time with current thermal energy to du/dt */
-	    if(tcool != 0)
-	      *fp++ = u / tcool;
-	    else
-	      *fp++ = 0;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_CONDRATE:		/* current heating/cooling due to thermal conduction  */
-      break;
-
-    case IO_BSMTH:		/* smoothed magnetic field */
-#ifdef OUTPUTBSMOOTH
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    for(k = 0; k < 3; k++)
-	      *fp++ = SphP[pindex].BSmooth[k];
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_DENN:		/* density normalization factor */
-#ifdef OUTPUTDENSNORM
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].DensityNorm;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_EGYPROM:
-#ifdef SFR_PROMOTION
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = P[pindex].EnergySN;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_EGYCOLD:
-#ifdef SFR_PROMOTION
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = P[pindex].EnergySNCold;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_CR_C0:
-#ifdef COSMIC_RAYS
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].CR_C0;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_CR_Q0:
-#ifdef COSMIC_RAYS
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].CR_q0;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_CR_P0:
-#ifdef COSMIC_RAYS
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = CR_Physical_Pressure(&SphP[pindex]);
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_CR_E0:
-#ifdef COSMIC_RAYS
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].CR_E0;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_CR_n0:
-#ifdef COSMIC_RAYS
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].CR_n0;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_CR_ThermalizationTime:
-#ifdef COSMIC_RAYS
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ =
-	      CR_Tab_GetThermalizationTimescale(SphP[pindex].CR_q0 *
-						pow(SphP[pindex].a2.Density * a3inv, 0.333333),
-						SphP[pindex].a2.Density * a3inv);
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_CR_DissipationTime:
-#ifdef COSMIC_RAYS
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ =
-	      CR_Tab_GetDissipationTimescale(SphP[pindex].CR_q0 *
-					     pow(SphP[pindex].a2.Density * a3inv, 0.333333),
-					     SphP[pindex].a2.Density * a3inv);
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_BHMASS:
-#ifdef BLACK_HOLES
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = P[pindex].BH_Mass;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_BHMDOT:
-#ifdef BLACK_HOLES
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = P[pindex].BH_Mdot;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_MACH:
-#ifdef MACHNUM
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].Shock_MachNumber;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_DTENERGY:
-#ifdef MACHSTATISTIC
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].Shock_DtEnergy;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_PRESHOCK_DENSITY:
-#ifdef CR_OUTPUT_JUMP_CONDITIONS
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].PreShock_PhysicalDensity;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_PRESHOCK_ENERGY:
-#ifdef CR_OUTPUT_JUMP_CONDITIONS
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].PreShock_PhysicalEnergy;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_PRESHOCK_XCR:
-#ifdef CR_OUTPUT_JUMP_CONDITIONS
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].PreShock_XCR;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_DENSITY_JUMP:
-#ifdef CR_OUTPUT_JUMP_CONDITIONS
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].Shock_DensityJump;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_ENERGY_JUMP:
-#ifdef CR_OUTPUT_JUMP_CONDITIONS
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].Shock_EnergyJump;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_CRINJECT:
-#if defined( COSMIC_RAYS ) && defined( CR_OUTPUT_INJECTION )
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = SphP[pindex].CR_Specific_SupernovaHeatingRate;
-	    n++;
-	  }
-#endif
-      break;
-
-#ifdef LT_STELLAREVOLUTION
-    case IO_Zs:
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    for(k = 0; k < LT_NMetP; k++)
-	      control[k] = 0;
-	    for(k = 0; k < LT_NMetP; k++)
-	      {
-		if(type == 4)
-		  *fp++ = MetP[P[pindex].MetID].Metals[k];
-		else
-		  *fp++ = SphP[pindex].Metals[k];
-		if(*(fp - 1) > 1)
-		  control[k]++;
-#ifdef LT_SEvDbg
-		metals[k + LT_NMetP * (type == 4)] += *(fp - 1);
-		metals[2 * LT_NMetP + 2] += *(fp - 1);
-		metals[2 * LT_NMetP + (type == 4)] += *(fp - 1);
-#endif
-	      }
-	    if(*(fp - 1) > 1)
-	      {
-		printf(" ------- [%d][%d] ", ThisTask, pindex);
-		for(k = 0; k < LT_NMetP; k++)
-		  printf(" %d ", control[k]);
-		printf("\n");
-	      }
-	    n++;
-	  }
-      break;
-    case IO_iMass:
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = MetP[P[pindex].MetID].iMass;
-	    n++;
-	  }
-      break;
-    case IO_CLDX:
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-#ifdef LT_EJECTA_IN_HOTPHASE
-	    *fp++ = SphP[pindex].x;
-#else
-	    get_starformation_rate(pindex);
-	    *fp++ = xclouds;
-	    xclouds = 0;
-#endif
-	    n++;
-	  }
-      break;
-#ifdef LT_TRACK_CONTRIBUTES
-    case IO_CONTRIB:
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    if(type == 0)
-	      *contrib++ = SphP[pindex].contrib;
-	    else if(type == 4)
-	      *contrib++ = MetP[P[pindex].MetID].contrib;
-	    n++;
-	  }
-      break;
-#endif
-#else
-    case IO_Zs:
-    case IO_iMass:
-    case IO_CLDX:
-    case IO_CONTRIB:
-      break;
-#endif
-
-    case IO_BG_METALS:
-#ifdef BG_SFR
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    for(k = 0; k < BG_NELEMENTS; k++)
-	      *fp++ = P[pindex].Metals[k];
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_BG_INITIAL_MASS:
-#ifdef BG_SFR
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = P[pindex].InitialMass;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_BG_METALLICITY:
-#ifdef BG_SFR
-      for(n = 0; n < pc; pindex++)
-	if(P[pindex].Type == type)
-	  {
-	    *fp++ = P[pindex].Metallicity;
-	    n++;
-	  }
-#endif
-      break;
-
-    case IO_LASTENTRY:
-      endrun(213);
-      break;
     }
 
   *startindex = pindex;
@@ -1114,7 +360,8 @@ void fill_write_buffer(enum iofields blocknr, int *startindex, int pc, int type)
 
 
 /*! This function tells the size of one data entry in each of the blocks
- *  defined for the output file.
+ *  defined for the output file. If one wants to add a new output-block, this
+ *  function should be augmented accordingly.
  */
 int get_bytes_per_blockelement(enum iofields blocknr)
 {
@@ -1124,12 +371,7 @@ int get_bytes_per_blockelement(enum iofields blocknr)
     {
     case IO_POS:
     case IO_VEL:
-    case IO_BSMTH:
     case IO_ACCEL:
-    case IO_BFLD:
-    case IO_DBDT:
-    case IO_STRESSDIAG:
-    case IO_STRESSOFFDIAG:
       bytes_per_blockelement = 3 * sizeof(float);
       break;
 
@@ -1144,112 +386,22 @@ int get_bytes_per_blockelement(enum iofields blocknr)
     case IO_MASS:
     case IO_U:
     case IO_RHO:
-    case IO_NE:
-    case IO_NH:
-    case IO_ELECT:
-    case IO_HI:
-    case IO_HII:
-    case IO_HeI:
-    case IO_HeII:
-    case IO_HeIII:
-    case IO_H2I:
-    case IO_H2II:
-    case IO_HM:
     case IO_HSML:
-    case IO_SFR:
-    case IO_AGE:
     case IO_POT:
     case IO_DTENTR:
-    case IO_STRESSBULK:
-    case IO_SHEARCOEFF:
     case IO_TSTP:
-    case IO_DIVB:
-    case IO_ABVC:
-    case IO_AMDC:
-    case IO_PHI:
-    case IO_COOLRATE:
-    case IO_CONDRATE:
-    case IO_DENN:
-    case IO_EGYPROM:
-    case IO_EGYCOLD:
-    case IO_CR_C0:
-    case IO_CR_Q0:
-    case IO_CR_P0:
-    case IO_CR_E0:
-    case IO_CR_n0:
-    case IO_CR_ThermalizationTime:
-    case IO_CR_DissipationTime:
-    case IO_BHMASS:
-    case IO_BHMDOT:
-    case IO_MACH:
-    case IO_DTENERGY:
-    case IO_PRESHOCK_DENSITY:
-    case IO_PRESHOCK_ENERGY:
-    case IO_PRESHOCK_XCR:
-    case IO_DENSITY_JUMP:
-    case IO_ENERGY_JUMP:
-    case IO_CRINJECT:
-    case IO_iMass:
-    case IO_CLDX:
       bytes_per_blockelement = sizeof(float);
-      break;
-
-    case IO_Z:
-#ifndef SFR_METALS
-      bytes_per_blockelement = sizeof(float);
-#else
-      bytes_per_blockelement = 12 * sizeof(float);
-#endif
-      break;
-
-    case IO_Zs:
-#ifdef LT_STELLAREVOLUTION
-      bytes_per_blockelement = LT_NMetP * sizeof(float);
-#else
-      bytes_per_blockelement = 0;
-#endif
-      break;
-
-    case IO_CONTRIB:
-#ifdef LT_TRACK_CONTRIBUTES
-      bytes_per_blockelement = sizeof(Contrib);
-#else
-      bytes_per_blockelement = 0;
-#endif
-      break;
-
-    case IO_BG_METALS:
-#ifdef BG_SFR
-      bytes_per_blockelement = BG_NELEMENTS * sizeof(float);
-#else
-      bytes_per_blockelement = 0;
-#endif
-      break;
-
-    case IO_BG_INITIAL_MASS:
-#ifdef BG_SFR
-      bytes_per_blockelement = sizeof(float);
-#else
-      bytes_per_blockelement = 0;
-#endif
-      break;
-
-    case IO_BG_METALLICITY:
-#ifdef BG_SFR
-      bytes_per_blockelement = sizeof(float);
-#else
-      bytes_per_blockelement = 0;
-#endif
-      break;
-
-    case IO_LASTENTRY:
-      endrun(214);
       break;
     }
 
   return bytes_per_blockelement;
 }
 
+
+/*! This function returns the type of the data contained in a given block of
+ *  the output file. If one wants to add a new output-block, this function
+ *  should be augmented accordingly.
+ */
 int get_datatype_in_block(enum iofields blocknr)
 {
   int typekey;
@@ -1273,7 +425,10 @@ int get_datatype_in_block(enum iofields blocknr)
 }
 
 
-
+/*! This function informs about the number of elements stored per particle for
+ *  the given block of the output file. If one wants to add a new
+ *  output-block, this function should be augmented accordingly.
+ */
 int get_values_per_blockelement(enum iofields blocknr)
 {
   int values = 0;
@@ -1282,12 +437,7 @@ int get_values_per_blockelement(enum iofields blocknr)
     {
     case IO_POS:
     case IO_VEL:
-    case IO_BSMTH:
     case IO_ACCEL:
-    case IO_BFLD:
-    case IO_DBDT:
-    case IO_STRESSDIAG:
-    case IO_STRESSOFFDIAG:
       values = 3;
       break;
 
@@ -1295,103 +445,22 @@ int get_values_per_blockelement(enum iofields blocknr)
     case IO_MASS:
     case IO_U:
     case IO_RHO:
-    case IO_NE:
-    case IO_NH:
-    case IO_ELECT:
-    case IO_HI:
-    case IO_HII:
-    case IO_HeI:
-    case IO_HeII:
-    case IO_HeIII:
-    case IO_H2I:
-    case IO_H2II:
-    case IO_HM:
     case IO_HSML:
-    case IO_SFR:
-    case IO_AGE:
     case IO_POT:
     case IO_DTENTR:
-    case IO_STRESSBULK:
-    case IO_SHEARCOEFF:
     case IO_TSTP:
-    case IO_DIVB:
-    case IO_ABVC:
-    case IO_AMDC:
-    case IO_PHI:
-    case IO_COOLRATE:
-    case IO_CONDRATE:
-    case IO_DENN:
-    case IO_EGYPROM:
-    case IO_EGYCOLD:
-    case IO_CR_C0:
-    case IO_CR_Q0:
-    case IO_CR_P0:
-    case IO_CR_E0:
-    case IO_CR_n0:
-    case IO_CR_ThermalizationTime:
-    case IO_CR_DissipationTime:
-    case IO_BHMASS:
-    case IO_BHMDOT:
-    case IO_MACH:
-    case IO_DTENERGY:
-    case IO_PRESHOCK_DENSITY:
-    case IO_PRESHOCK_ENERGY:
-    case IO_PRESHOCK_XCR:
-    case IO_DENSITY_JUMP:
-    case IO_ENERGY_JUMP:
-    case IO_CRINJECT:
-    case IO_iMass:
-    case IO_BG_INITIAL_MASS:
-    case IO_BG_METALLICITY:
-    case IO_CLDX:
       values = 1;
-      break;
-
-    case IO_Z:
-#ifndef SFR_METALS
-      values = 1;
-#else
-      values = 12;
-#endif
-      break;
-
-    case IO_Zs:
-#ifdef LT_STELLAREVOLUTION
-      values = LT_NMetP;
-#else
-      values = 0;
-#endif
-      break;
-
-    case IO_CONTRIB:
-#ifdef LT_TRACK_CONTRIB
-      values = 1;
-#else
-      values = 0;
-#endif
-      break;
-
-    case IO_BG_METALS:
-#ifdef BG_SFR
-      values = BG_NELEMENTS;
-#else
-      values = 0;
-#endif
-      break;
-
-    case IO_LASTENTRY:
-      endrun(215);
       break;
     }
+
   return values;
 }
 
 
-
-
 /*! This function determines how many particles there are in a given block,
  *  based on the information in the header-structure.  It also flags particle
- *  types that are present in the block in the typelist array.
+ *  types that are present in the block in the typelist array. If one wants to
+ *  add a new output-block, this function should be augmented accordingly.
  */
 int get_particles_in_block(enum iofields blocknr, int *typelist)
 {
@@ -1441,121 +510,11 @@ int get_particles_in_block(enum iofields blocknr, int *typelist)
 
     case IO_U:
     case IO_RHO:
-    case IO_NE:
-    case IO_NH:
-    case IO_ELECT:
-    case IO_HI:
-    case IO_HII:
-    case IO_HeI:
-    case IO_HeII:
-    case IO_HeIII:
-    case IO_H2I:
-    case IO_H2II:
-    case IO_HM:
     case IO_HSML:
-    case IO_SFR:
     case IO_DTENTR:
-    case IO_STRESSDIAG:
-    case IO_STRESSOFFDIAG:
-    case IO_STRESSBULK:
-    case IO_SHEARCOEFF:
-    case IO_BSMTH:
-    case IO_BFLD:
-    case IO_DBDT:
-    case IO_DIVB:
-    case IO_ABVC:
-    case IO_AMDC:
-    case IO_PHI:
-    case IO_COOLRATE:
-    case IO_CONDRATE:
-    case IO_DENN:
-    case IO_CR_C0:
-    case IO_CR_Q0:
-    case IO_CR_P0:
-    case IO_CR_E0:
-    case IO_CR_n0:
-    case IO_CR_ThermalizationTime:
-    case IO_CR_DissipationTime:
-    case IO_MACH:
-    case IO_DTENERGY:
-    case IO_PRESHOCK_DENSITY:
-    case IO_PRESHOCK_ENERGY:
-    case IO_PRESHOCK_XCR:
-    case IO_DENSITY_JUMP:
-    case IO_ENERGY_JUMP:
-    case IO_CRINJECT:
       for(i = 1; i < 6; i++)
 	typelist[i] = 0;
       return ngas;
-      break;
-
-    case IO_AGE:
-      for(i = 0; i < 6; i++)
-	if(i != 4)
-	  typelist[i] = 0;
-      return nstars;
-
-    case IO_Z:
-    case IO_EGYPROM:
-    case IO_EGYCOLD:
-    case IO_BG_METALS:
-#ifdef BG_SFR
-    case IO_HSML:
-#endif
-      for(i = 0; i < 6; i++)
-	if(i != 0 && i != 4)
-	  typelist[i] = 0;
-      return ngas + nstars;
-      break;
-
-    case IO_BG_INITIAL_MASS:
-      for(i = 0; i < 6; i++)
-	if(i != 0 && i != 4)
-	  typelist[i] = 0;
-      return ngas + nstars;
-      break;
-
-    case IO_BG_METALLICITY:
-      for(i = 0; i < 6; i++)
-	if(i != 0 && i != 4)
-	  typelist[i] = 0;
-      return ngas + nstars;
-      break;
-
-    case IO_BHMASS:
-    case IO_BHMDOT:
-      for(i = 0; i < 6; i++)
-	if(i != 5)
-	  typelist[i] = 0;
-      return header.npart[5];
-      break;
-    case IO_Zs:
-      for(i = 0; i < 6; i++)
-	if(i != 0 && i != 4)
-	  typelist[i] = 0;
-      return ngas + nstars;
-      break;
-    case IO_iMass:
-      for(i = 0; i < 6; i++)
-	if(i != 4)
-	  typelist[i] = 0;
-      return nstars;
-      break;
-    case IO_CLDX:
-      for(i = 0; i < 6; i++)
-	if(i != 0)
-	  typelist[i] = 0;
-      return ngas;
-      break;
-    case IO_CONTRIB:
-      for(i = 0; i < 6; i++)
-	if(i != 0 && i != 4)
-	  typelist[i] = 0;
-      return ngas + nstars;
-      break;
-
-    case IO_LASTENTRY:
-      endrun(216);
       break;
     }
 
@@ -1565,565 +524,95 @@ int get_particles_in_block(enum iofields blocknr, int *typelist)
 
 
 
-/*! This function tells whether a block in the output file is present or not.
+/*! This function tells whether or not a given block in the output file is
+ *  present, depending on the type of simulation run and the compile-time
+ *  options. If one wants to add a new output-block, this function should be
+ *  augmented accordingly.
  */
 int blockpresent(enum iofields blocknr)
 {
-  switch (blocknr)
-    {
-    case IO_POS:
-    case IO_VEL:
-    case IO_ID:
-    case IO_MASS:
-    case IO_U:
-    case IO_RHO:
-    case IO_HSML:
-      return 1;			/* always present */
 
-    case IO_NE:
-    case IO_NH:
-      if(All.CoolingOn == 0)
-	return 0;
-      else
-	return 1;
-      break;
-
-
-    case IO_SFR:
-    case IO_AGE:
-    case IO_Z:
-      if(All.StarformationOn == 0)
-	return 0;
-      else
-	{
-#ifdef SFR
-	  if(blocknr == IO_SFR)
-	    return 1;
-#endif
-#ifdef STELLARAGE
-	  if(blocknr == IO_AGE)
-	    return 1;
-#endif
-#ifdef METALS
-	  if(blocknr == IO_Z)
-	    return 1;
-#endif
-	}
-      return 0;
-      break;
-
-
-    case IO_ELECT:
-    case IO_HI:
-    case IO_HII:
-    case IO_HeI:
-    case IO_HeII:
-    case IO_HeIII:
-    case IO_H2I:
-    case IO_H2II:
-    case IO_HM:
-#ifdef CHEMISTRY
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-
-    case IO_POT:
-#ifdef OUTPUTPOTENTIAL
-      return 1;
-#else
-      return 0;
+#ifndef OUTPUTPOTENTIAL
+  if(blocknr == IO_POT)
+    return 0;
 #endif
 
-    case IO_Zs:
-    case IO_iMass:
-    case IO_CLDX:
-#ifdef LT_STELLAREVOLUTION
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-    case IO_CONTRIB:
-#ifdef LT_TRACK_CONTRIBUTES
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-    case IO_ACCEL:
-#ifdef OUTPUTACCELERATION
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-
-    case IO_DTENTR:
-#ifdef OUTPUTCHANGEOFENTROPY
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-    case IO_STRESSDIAG:
-#ifdef OUTPUTSTRESS
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-    case IO_STRESSOFFDIAG:
-#ifdef OUTPUTSTRESS
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-    case IO_STRESSBULK:
-#ifdef OUTPUTBULKSTRESS
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-    case IO_SHEARCOEFF:
-#ifdef OUTPUTSHEARCOEFF
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-      
-    case IO_TSTP:
-#ifdef OUTPUTTIMESTEP
-      return 1;
-#else
-      return 0;
+#ifndef OUTPUTACCELERATION
+  if(blocknr == IO_ACCEL)
+    return 0;
 #endif
 
-
-    case IO_BFLD:
-#ifdef MAGNETIC
-      return 1;
-#else
-      return 0;
+#ifndef OUTPUTCHANGEOFENTROPY
+  if(blocknr == IO_DTENTR)
+    return 0;
 #endif
-      break;
 
-
-    case IO_DBDT:
-#ifdef DBOUTPUT
-      return 1;
-#else
-      return 0;
+#ifndef OUTPUTTIMESTEP
+  if(blocknr == IO_TSTP)
+    return 0;
 #endif
-      break;
 
-
-    case IO_DIVB:
-#ifdef TRACEDIVB
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-
-    case IO_ABVC:
-#ifdef TIME_DEP_ART_VISC
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-
-    case IO_AMDC:
-#ifdef TIME_DEP_MAGN_DISP
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-
-    case IO_PHI:
-#ifdef DIVBCLEANING_DEDNER
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-
-    case IO_COOLRATE:
-#ifdef OUTPUTCOOLRATE
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-
-    case IO_CONDRATE:
-#ifdef OUTPUTCONDRATE
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-
-    case IO_BSMTH:
-#ifdef OUTPUTBSMOOTH
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-
-    case IO_DENN:
-#ifdef OUTPUTDENSNORM
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-
-    case IO_EGYPROM:
-    case IO_EGYCOLD:
-#ifdef SFR_PROMOTION
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-
-    case IO_BHMASS:
-    case IO_BHMDOT:
-#ifdef BLACK_HOLES
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-
-    case IO_MACH:
-#ifdef MACHNUM
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-
-    case IO_DTENERGY:
-#ifdef MACHSTATISTIC
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-
-    case IO_CR_C0:
-    case IO_CR_Q0:
-    case IO_CR_P0:
-    case IO_CR_E0:
-    case IO_CR_n0:
-    case IO_CR_ThermalizationTime:
-    case IO_CR_DissipationTime:
-#ifdef COSMIC_RAYS
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-
-    case IO_PRESHOCK_DENSITY:
-    case IO_PRESHOCK_ENERGY:
-    case IO_PRESHOCK_XCR:
-    case IO_DENSITY_JUMP:
-    case IO_ENERGY_JUMP:
-#ifdef CR_OUTPUT_JUMP_CONDITIONS
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-
-    case IO_CRINJECT:
-#ifdef CR_OUTPUT_INJECTION
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-
-    case IO_BG_METALS:
-#ifdef BG_SFR
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-    case IO_BG_INITIAL_MASS:
-#ifdef BG_SFR
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-    case IO_BG_METALLICITY:
-#ifdef BG_SFR
-      return 1;
-#else
-      return 0;
-#endif
-      break;
-
-    case IO_LASTENTRY:
-      return 0;			/* will not occur */
-      break;
-    }
-
-  return 0;			/* default: not present */
+  return 1;			/* default: present */
 }
 
 
 
 
-/*! This function associates a short 4-character block name with each block number.
- *  This is stored in front of each block for snapshot FileFormat=2.
+/*! This function associates a short 4-character block name with each block
+ *  number.  This is stored in front of each block for snapshot
+ *  FileFormat=2. If one wants to add a new output-block, this function should
+ *  be augmented accordingly.
  */
-void get_Tab_IO_Label(enum iofields blocknr, char *label)
+void fill_Tab_IO_Labels(void)
 {
-  switch (blocknr)
-    {
-    case IO_POS:
-      strncpy(label, "POS ", 4);
-      break;
-    case IO_VEL:
-      strncpy(label, "VEL ", 4);
-      break;
-    case IO_ID:
-      strncpy(label, "ID  ", 4);
-      break;
-    case IO_MASS:
-      strncpy(label, "MASS", 4);
-      break;
-    case IO_U:
-      strncpy(label, "U   ", 4);
-      break;
-    case IO_RHO:
-      strncpy(label, "RHO ", 4);
-      break;
-    case IO_NE:
-      strncpy(label, "NE  ", 4);
-      break;
-    case IO_NH:
-      strncpy(label, "NH  ", 4);
-      break;
-    case IO_ELECT:
-      strncpy(label, "elect ", 4);
-      break;
-    case IO_HI:
-      strncpy(label, "HI ", 4);
-      break;
-    case IO_HII:
-      strncpy(label, "HII ", 4);
-      break;
-    case IO_HeI:
-      strncpy(label, "HeI ", 4);
-      break;
-    case IO_HeII:
-      strncpy(label, "HeII ", 4);
-      break;
-    case IO_HeIII:
-      strncpy(label, "HeIII ", 4);
-      break;
-    case IO_H2I:
-      strncpy(label, "H2I ", 4);
-      break;
-    case IO_H2II:
-      strncpy(label, "H2II ", 4);
-      break;
-    case IO_HM:
-      strncpy(label, "HM ", 4);
-      break;
-    case IO_HSML:
-      strncpy(label, "HSML", 4);
-      break;
-    case IO_SFR:
-      strncpy(label, "SFR ", 4);
-      break;
-    case IO_AGE:
-      strncpy(label, "AGE ", 4);
-      break;
-    case IO_Z:
-      strncpy(label, "Z   ", 4);
-      break;
-    case IO_POT:
-      strncpy(label, "POT ", 4);
-      break;
-    case IO_ACCEL:
-      strncpy(label, "ACCE", 4);
-      break;
-    case IO_DTENTR:
-      strncpy(label, "ENDT", 4);
-      break;
-    case IO_STRESSDIAG:
-      strncpy(label, "STRD", 4);
-      break;
-    case IO_STRESSOFFDIAG:
-      strncpy(label, "STRO", 4);
-      break;
-    case IO_STRESSBULK:
-      strncpy(label, "STRB", 4);
-      break;
-    case IO_SHEARCOEFF:
-      strncpy(label, "SHCO", 4);
-      break; 
-   case IO_TSTP:
-      strncpy(label, "TSTP", 4);
-      break;
-    case IO_BFLD:
-      strncpy(label, "BFLD", 4);
-      break;
-    case IO_DBDT:
-      strncpy(label, "DBDT", 4);
-      break;
-    case IO_DIVB:
-      strncpy(label, "DIVB", 4);
-      break;
-    case IO_ABVC:
-      strncpy(label, "ABVC", 4);
-      break;
-    case IO_AMDC:
-      strncpy(label, "AMDC", 4);
-      break;
-    case IO_PHI:
-      strncpy(label, "PHI ", 4);
-      break;
-    case IO_COOLRATE:
-      strncpy(label, "COOR", 4);
-      break;
-    case IO_CONDRATE:
-      strncpy(label, "CONR", 4);
-      break;
-    case IO_BSMTH:
-      strncpy(label, "BFSM", 4);
-      break;
-    case IO_DENN:
-      strncpy(label, "DENN", 4);
-      break;
-    case IO_EGYPROM:
-      strncpy(label, "EGYP", 4);
-      break;
-    case IO_EGYCOLD:
-      strncpy(label, "EGYC", 4);
-      break;
-    case IO_CR_C0:
-      strncpy(label, "CRC0", 4);
-      break;
-    case IO_CR_Q0:
-      strncpy(label, "CRQ0", 4);
-      break;
-    case IO_CR_P0:
-      strncpy(label, "CRP0", 4);
-      break;
-    case IO_CR_E0:
-      strncpy(label, "CRE0", 4);
-      break;
-    case IO_CR_n0:
-      strncpy(label, "CRn0", 4);
-      break;
-    case IO_CR_ThermalizationTime:
-      strncpy(label, "CRco", 4);
-      break;
-    case IO_CR_DissipationTime:
-      strncpy(label, "CRdi", 4);
-      break;
-    case IO_BHMASS:
-      strncpy(label, "BHMA", 4);
-      break;
-    case IO_BHMDOT:
-      strncpy(label, "BHMD", 4);
-      break;
-    case IO_MACH:
-      strncpy(label, "MACH", 4);
-      break;
-    case IO_DTENERGY:
-      strncpy(label, "DTEG", 4);
-      break;
-    case IO_PRESHOCK_DENSITY:
-      strncpy(label, "PSDE", 4);
-      break;
-    case IO_PRESHOCK_ENERGY:
-      strncpy(label, "PSEN", 4);
-      break;
-    case IO_PRESHOCK_XCR:
-      strncpy(label, "PSXC", 4);
-      break;
-    case IO_DENSITY_JUMP:
-      strncpy(label, "DJMP", 4);
-      break;
-    case IO_ENERGY_JUMP:
-      strncpy(label, "EJMP", 4);
-      break;
-    case IO_CRINJECT:
-      strncpy(label, "CRDE", 4);
-      break;
-    case IO_Zs:
-      strncpy(label, "Zs  ", 4);
-      break;
-    case IO_iMass:
-      strncpy(label, "iM  ", 4);
-      break;
-    case IO_CLDX:
-      strncpy(label, "CLDX", 4);
-      break;
-    case IO_CONTRIB:
-      strncpy(label, "TRCK", 4);
-      break;
-    case IO_BG_METALS:
-      strncpy(label, "BGMT", 4);
-      break;
-    case IO_BG_INITIAL_MASS:
-      strncpy(label, "BGIM", 4);
-      break;
-    case IO_BG_METALLICITY:
-      strncpy(label, "BGZ", 4);
-      break;
+  enum iofields i;
 
-    case IO_LASTENTRY:
-      endrun(217);
-      break;
-    }
+  for(i = 0; i < IO_NBLOCKS; i++)
+    switch (i)
+      {
+      case IO_POS:
+	strncpy(Tab_IO_Labels[IO_POS], "POS ", 4);
+	break;
+      case IO_VEL:
+	strncpy(Tab_IO_Labels[IO_VEL], "VEL ", 4);
+	break;
+      case IO_ID:
+	strncpy(Tab_IO_Labels[IO_ID], "ID  ", 4);
+	break;
+      case IO_MASS:
+	strncpy(Tab_IO_Labels[IO_MASS], "MASS", 4);
+	break;
+      case IO_U:
+	strncpy(Tab_IO_Labels[IO_U], "U   ", 4);
+	break;
+      case IO_RHO:
+	strncpy(Tab_IO_Labels[IO_RHO], "RHO ", 4);
+	break;
+      case IO_HSML:
+	strncpy(Tab_IO_Labels[IO_HSML], "HSML", 4);
+	break;
+      case IO_POT:
+	strncpy(Tab_IO_Labels[IO_POT], "POT ", 4);
+	break;
+      case IO_ACCEL:
+	strncpy(Tab_IO_Labels[IO_ACCEL], "ACCE", 4);
+	break;
+      case IO_DTENTR:
+	strncpy(Tab_IO_Labels[IO_DTENTR], "ENDT", 4);
+	break;
+      case IO_TSTP:
+	strncpy(Tab_IO_Labels[IO_TSTP], "TSTP", 4);
+	break;
+      }
 }
 
-
+/*! This function returns a descriptive character string that describes the
+ *  name of the block when the HDF5 file format is used.  If one wants to add
+ *  a new output-block, this function should be augmented accordingly.
+ */
 void get_dataset_name(enum iofields blocknr, char *buf)
 {
+
   strcpy(buf, "default");
 
   switch (blocknr)
@@ -2146,50 +635,8 @@ void get_dataset_name(enum iofields blocknr, char *buf)
     case IO_RHO:
       strcpy(buf, "Density");
       break;
-    case IO_NE:
-      strcpy(buf, "ElectronAbundance");
-      break;
-    case IO_NH:
-      strcpy(buf, "NeutralHydrogenAbundance");
-      break;
-    case IO_ELECT:
-      strcpy(buf, "elect");
-      break;
-    case IO_HI:
-      strcpy(buf, "HI");
-      break;
-    case IO_HII:
-      strcpy(buf, "HII");
-      break;
-    case IO_HeI:
-      strcpy(buf, "HeI");
-      break;
-    case IO_HeII:
-      strcpy(buf, "HeII");
-      break;
-    case IO_HeIII:
-      strcpy(buf, "HeIII");
-      break;
-    case IO_H2I:
-      strcpy(buf, "H2I");
-      break;
-    case IO_H2II:
-      strcpy(buf, "H2II");
-      break;
-    case IO_HM:
-      strcpy(buf, "HM");
-      break;
     case IO_HSML:
       strcpy(buf, "SmoothingLength");
-      break;
-    case IO_SFR:
-      strcpy(buf, "StarFormationRate");
-      break;
-    case IO_AGE:
-      strcpy(buf, "StellarFormationTime");
-      break;
-    case IO_Z:
-      strcpy(buf, "Metallicity");
       break;
     case IO_POT:
       strcpy(buf, "Potential");
@@ -2200,148 +647,27 @@ void get_dataset_name(enum iofields blocknr, char *buf)
     case IO_DTENTR:
       strcpy(buf, "RateOfChangeOfEntropy");
       break;
-    case IO_STRESSDIAG:
-      strcpy(buf, "DiagonalStressTensor");
-      break;
-    case IO_STRESSOFFDIAG:
-      strcpy(buf, "OffDiagonalStressTensor");
-      break;
-    case IO_STRESSBULK:
-      strcpy(buf, "BulkStressTensor");
-      break;
-    case IO_SHEARCOEFF:
-      strcpy(buf, "ShearCoefficient");
-      break;
     case IO_TSTP:
       strcpy(buf, "TimeStep");
-      break;
-    case IO_BFLD:
-      strcpy(buf, "MagneticField");
-      break;
-    case IO_DBDT:
-      strcpy(buf, "RateOfChangeOfMagneticField");
-      break;
-    case IO_DIVB:
-      strcpy(buf, "DivergenceOfMagneticField");
-      break;
-    case IO_ABVC:
-      strcpy(buf, "ArtificialViscosity");
-      break;
-    case IO_AMDC:
-      strcpy(buf, "ArtificialMagneticDissipatio");
-      break;
-    case IO_PHI:
-      strcpy(buf, "DivBcleaningFunctionPhi");
-      break;
-    case IO_COOLRATE:
-      strcpy(buf, "CoolingRate");
-      break;
-    case IO_CONDRATE:
-      strcpy(buf, "ConductionRate");
-      break;
-    case IO_BSMTH:
-      strcpy(buf, "SmoothedMagneticField");
-      break;
-    case IO_DENN:
-      strcpy(buf, "Denn");
-      break;
-    case IO_EGYPROM:
-      strcpy(buf, "EnergyReservoirForFeeback");
-      break;
-    case IO_EGYCOLD:
-      strcpy(buf, "EnergyReservoirForColdPhase");
-      break;
-    case IO_CR_C0:
-      strcpy(buf, "CR_C0");
-      break;
-    case IO_CR_Q0:
-      strcpy(buf, "CR_q0");
-      break;
-    case IO_CR_P0:
-      strcpy(buf, "CR_P0");
-      break;
-    case IO_CR_E0:
-      strcpy(buf, "CR_E0");
-      break;
-    case IO_CR_n0:
-      strcpy(buf, "CR_n0");
-      break;
-    case IO_CR_ThermalizationTime:
-      strcpy(buf, "CR_ThermalizationTime");
-      break;
-    case IO_CR_DissipationTime:
-      strcpy(buf, "CR_DissipationTime");
-      break;
-    case IO_BHMASS:
-      strcpy(buf, "BH_Mass");
-      break;
-    case IO_BHMDOT:
-      strcpy(buf, "BH_Mdot");
-      break;
-    case IO_MACH:
-      strcpy(buf, "MachNumber");
-      break;
-    case IO_DTENERGY:
-      strcpy(buf, "DtEnergy");
-      break;
-    case IO_PRESHOCK_DENSITY:
-      strcpy(buf, "Preshock_Density");
-      break;
-    case IO_PRESHOCK_ENERGY:
-      strcpy(buf, "Preshock_Energy");
-      break;
-    case IO_PRESHOCK_XCR:
-      strcpy(buf, "Preshock_XCR");
-      break;
-    case IO_DENSITY_JUMP:
-      strcpy(buf, "DensityJump");
-      break;
-    case IO_ENERGY_JUMP:
-      strcpy(buf, "EnergyJump");
-      break;
-    case IO_CRINJECT:
-      strcpy(buf, "CR_DtE");
-      break;
-    case IO_Zs:
-      strcpy(buf, "Zs");
-      break;
-    case IO_iMass:
-      strcpy(buf, "SSPInitialMass");
-      break;
-    case IO_CLDX:
-      strcpy(buf, "CloudFraction");
-      break;
-    case IO_CONTRIB:
-      strcpy(buf, "TrackContributes");
-      break;
-    case IO_BG_METALS:
-      strcpy(buf, "MetalMasses");
-      break;
-    case IO_BG_INITIAL_MASS:
-      strcpy(buf, "InitialMass");
-      break;
-    case IO_BG_METALLICITY:
-      strcpy(buf, "Metallicity");
-      break;
-
-    case IO_LASTENTRY:
-      endrun(218);
       break;
     }
 }
 
 
 
-/*! This function writes a snapshot file containing the data from processors
- *  'writeTask' to 'lastTask'. 'writeTask' is the one that actually writes.
- *  Each snapshot file contains a header first, then particle positions,
- *  velocities and ID's.  Then particle masses are written for those particle
- *  types with zero entry in MassTable.  After that, first the internal
- *  energies u, and then the density is written for the SPH particles.  If
- *  cooling is enabled, mean molecular weight and neutral hydrogen abundance
- *  are written for the gas particles. This is followed by the SPH smoothing
- *  length and further blocks of information, depending on included physics
- *  and compile-time flags.
+/*! This function writes an actual snapshot file containing the data from
+ *  processors 'writeTask' to 'lastTask'. 'writeTask' is the one that actually
+ *  writes.  Each snapshot file contains a header first, then particle
+ *  positions, velocities and ID's.  Particle masses are written only for
+ *  those particle types with zero entry in MassTable.  After that, first the
+ *  internal energies u, and then the density is written for the SPH
+ *  particles.  If cooling is enabled, mean molecular weight and neutral
+ *  hydrogen abundance are written for the gas particles. This is followed by
+ *  the SPH smoothing length and further blocks of information, depending on
+ *  included physics and compile-time flags.  If HDF5 is used, the header is
+ *  stored in a group called "/Header", and the particle data is stored
+ *  separately for each particle type in groups calles "/PartType0",
+ *  "/PartType1", etc. The sequence of the blocks is unimportant in this case.
  */
 void write_file(char *fname, int writeTask, int lastTask)
 {
@@ -2349,24 +675,17 @@ void write_file(char *fname, int writeTask, int lastTask)
   int n_for_this_task, ntask, n, p, pc, offset = 0, task;
   int blockmaxlen, ntot_type[6], nn[6];
   enum iofields blocknr;
-  char label[8];
-  int bnr;
   int blksize;
   MPI_Status status;
   FILE *fd = 0;
 
 #ifdef HAVE_HDF5
-  hid_t hdf5_file = 0, hdf5_grp[6], hdf5_headergrp = 0, hdf5_dataspace_memory, hdf5_paramgrp = 0;
+  hid_t hdf5_file = 0, hdf5_grp[6], hdf5_headergrp = 0, hdf5_dataspace_memory;
   hid_t hdf5_datatype = 0, hdf5_dataspace_in_file = 0, hdf5_dataset = 0;
   herr_t hdf5_status;
   hsize_t dims[2], count[2], start[2];
-  int rank = 0, pcsum = 0;
+  int rank, pcsum = 0;
   char buf[500];
-#endif
-
-#ifdef LT_SEvDbg
-  char buf[300];
-  FILE *fd_dbg = 0;
 #endif
 
 #define SKIP  {my_fwrite(&blksize,sizeof(int),1,fd);}
@@ -2422,14 +741,8 @@ void write_file(char *fname, int writeTask, int lastTask)
   header.flag_metals = 0;
 
 #ifdef COOLING
-#ifndef BG_COOLING
   header.flag_cooling = 1;
 #endif
-#ifdef LT_METAL_COOLING
-  header.flag_metalcooling = 1;
-#endif
-#endif
-
 #ifdef SFR
   header.flag_sfr = 1;
   header.flag_feedback = 1;
@@ -2438,9 +751,6 @@ void write_file(char *fname, int writeTask, int lastTask)
 #endif
 #ifdef METALS
   header.flag_metals = 1;
-#endif
-#ifdef LT_STELLAREVOLUTION
-  header.flag_stellarevolution = 2;
 #endif
 #endif
 
@@ -2487,7 +797,7 @@ void write_file(char *fname, int writeTask, int lastTask)
 	    {
 	      blksize = sizeof(int) + 4 * sizeof(char);
 	      SKIP;
-	      my_fwrite((void *) "HEAD", sizeof(char), 4, fd);
+	      my_fwrite("HEAD", sizeof(char), 4, fd);
 	      nextblock = sizeof(header) + 2 * sizeof(int);
 	      my_fwrite(&nextblock, sizeof(int), 1, fd);
 	      SKIP;
@@ -2498,21 +808,12 @@ void write_file(char *fname, int writeTask, int lastTask)
 	  my_fwrite(&header, sizeof(header), 1, fd);
 	  SKIP;
 	}
-#ifdef LT_SEvDbg
-      sprintf(buf, "%s.dbg", fname);
-      fd_dbg = fopen(buf, "w");
-#endif
     }
 
   ntask = lastTask - writeTask + 1;
 
-  for(bnr = 0; bnr < 1000; bnr++)
+  for(blocknr = 0; blocknr < IO_NBLOCKS; blocknr++)
     {
-      blocknr = (enum iofields) bnr;
-
-      if(blocknr == IO_LASTENTRY)
-	break;
-
       if(blockpresent(blocknr))
 	{
 	  bytes_per_blockelement = get_bytes_per_blockelement(blocknr);
@@ -2532,8 +833,7 @@ void write_file(char *fname, int writeTask, int lastTask)
 			{
 			  blksize = sizeof(int) + 4 * sizeof(char);
 			  SKIP;
-			  get_Tab_IO_Label(blocknr, label);
-			  my_fwrite(label, sizeof(char), 4, fd);
+			  my_fwrite(Tab_IO_Labels[blocknr], sizeof(char), 4, fd);
 			  nextblock = npart * bytes_per_blockelement + 2 * sizeof(int);
 			  my_fwrite(&nextblock, sizeof(int), 1, fd);
 			  SKIP;
@@ -2578,7 +878,6 @@ void write_file(char *fname, int writeTask, int lastTask)
 			  hdf5_dataset =
 			    H5Dcreate(hdf5_grp[type], buf, hdf5_datatype, hdf5_dataspace_in_file,
 				      H5P_DEFAULT);
-
 			  pcsum = 0;
 			}
 #endif
@@ -2635,21 +934,14 @@ void write_file(char *fname, int writeTask, int lastTask)
 				      hdf5_dataspace_memory = H5Screate_simple(rank, dims, NULL);
 
 				      hdf5_status =
-					H5Dwrite(hdf5_dataset, hdf5_datatype,
-						 hdf5_dataspace_memory,
+					H5Dwrite(hdf5_dataset, hdf5_datatype, hdf5_dataspace_memory,
 						 hdf5_dataspace_in_file, H5P_DEFAULT, CommBuffer);
 
 				      H5Sclose(hdf5_dataspace_memory);
 #endif
 				    }
 				  else
-				    {
-				      my_fwrite(CommBuffer, bytes_per_blockelement, pc, fd);
-#ifdef LT_SEvDbg
-				      if(blocknr == IO_Zs)
-					my_fwrite(CommBuffer, bytes_per_blockelement, pc, fd_dbg);
-#endif
-				    }
+				    my_fwrite(CommBuffer, bytes_per_blockelement, pc, fd);
 				}
 
 			      n_for_this_task -= pc;
@@ -2693,15 +985,15 @@ void write_file(char *fname, int writeTask, int lastTask)
 	}
       else
 	fclose(fd);
-#ifdef LT_SEvDbg
-      fclose(fd_dbg);
-#endif
     }
 }
 
 
 
 
+/*! This function writes the header information in case HDF5 is selected as
+ *  file format.
+ */
 #ifdef HAVE_HDF5
 void write_header_attributes_in_hdf5(hid_t handle)
 {
@@ -2808,6 +1100,15 @@ void write_header_attributes_in_hdf5(hid_t handle)
   H5Awrite(hdf5_attribute, H5T_NATIVE_INT, &header.flag_feedback);
   H5Aclose(hdf5_attribute);
   H5Sclose(hdf5_dataspace);
+
+  header.flag_entropy_instead_u = 0;
+
+  hdf5_dataspace = H5Screate(H5S_SIMPLE);
+  H5Sset_extent_simple(hdf5_dataspace, 1, adim, NULL);
+  hdf5_attribute = H5Acreate(handle, "Flag_Entropy_ICs", H5T_NATIVE_UINT, hdf5_dataspace, H5P_DEFAULT);
+  H5Awrite(hdf5_attribute, H5T_NATIVE_UINT, &header.flag_entropy_instead_u);
+  H5Aclose(hdf5_attribute);
+  H5Sclose(hdf5_dataspace);
 }
 #endif
 
@@ -2841,188 +1142,9 @@ size_t my_fread(void *ptr, size_t size, size_t nmemb, FILE * stream)
 
   if((nread = fread(ptr, size, nmemb, stream)) != nmemb)
     {
-      if(feof(stream))
-        printf("I/O error (fread) on task=%d has occured: end of file\n", ThisTask);
-      else
-        printf("I/O error (fread) on task=%d has occured: %s\n", ThisTask, strerror(errno));
+      printf("I/O error (fread) on task=%d has occured: %s\n", ThisTask, strerror(errno));
       fflush(stdout);
       endrun(778);
     }
   return nread;
 }
-
-#ifdef LT_SMOOTH_Z
-
-void Spy_Z_Smoothing(int num)
-{
-#define RhoBins 30
-#define TempBins 30
-#define MinT 4.0		/* log10 */
-#define MaxT 8.0		/* log10 */
-
-  double dmax1, dmax2;
-  double dmin1, dmin2;
-  int i, k, j;
-
-  double XH, yhelium;
-
-  double minR, maxR, MinR, MaxR;
-
-  double a3inv;
-  double T, Z, rho, u, mu, Ne;
-
-  double Ls, Lt, Zs, Zt;
-
-  double rho_logbin, temp_logbin;
-
-  double Ztable[RhoBins][TempBins], Zttable[RhoBins][TempBins],
-    Zstable[RhoBins][TempBins], Ltable[RhoBins][TempBins];
-  int Ntable[RhoBins][TempBins];
-
-  /* tables for summing-up @ proc 0 */
-  double ZTable[RhoBins][TempBins], ZTTable[RhoBins][TempBins], ZSTable[RhoBins][TempBins],
-    LTable[RhoBins][TempBins];
-  int NTable[RhoBins][TempBins];
-
-  FILE *file;
-  char fname[500];
-
-  a3inv = 1 / (All.Time * All.Time * All.Time);
-
-  XH = 0.76;
-  yhelium = (1 - XH) / (4 * XH);
-
-  minR = maxR = SphP[0].a2.Density;
-
-  /* find the local extent of Rho */
-  for(i = 1; i < NumPart; i++)
-    if(P[i].Type == 0)
-      if(SphP[i].a2.Density > 0)
-	{
-	  if(SphP[i].a2.Density < minR)
-	    minR = SphP[i].a2.Density;
-	  if(SphP[i].a2.Density > maxR)
-	    maxR = SphP[i].a2.Density;
-	}
-
-
-  /* find the global extent of Rho and Temp */
-  MPI_Allreduce(&minR, &MinR, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
-  MPI_Allreduce(&maxR, &MaxR, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
-
-  MinR = log10(MinR);
-  MaxR = log10(MaxR);
-
-  rho_logbin = (MaxR - MinR) / RhoBins;
-  temp_logbin = (MaxT - MinT) / TempBins;
-
-  /* actually build the table */
-
-  for(k = 0; k < RhoBins; k++)
-    for(j = 0; j < TempBins; j++)
-      Ntable[k][j] = (int) (Ltable[k][j] = Ztable[k][j] = Zttable[k][j] = Zstable[k][j] = 0);
-
-  for(i = 0; i < NumPart; i++)
-    if(P[i].Type == 0)
-      {
-	Ne = (double) SphP[i].Ne;
-	/*
-	   T = log10(convert_u_to_temp(SphP[i].Entropy / 
-	   GAMMA_MINUS1 * pow(SphP[i].a2.Density * a3inv, GAMMA_MINUS1)*
-	   All.UnitPressure_in_cgs / All.UnitDensity_in_cgs,
-	   SphP[i].a2.Density * All.UnitDensity_in_cgs, &Ne));
-	 */
-	mu = (1 + 4 * yhelium) / (1 + yhelium + SphP[i].Ne);
-	u = SphP[i].Entropy / GAMMA_MINUS1 * pow(SphP[i].a2.Density * a3inv, GAMMA_MINUS1) *
-	  All.UnitPressure_in_cgs / All.UnitDensity_in_cgs;
-
-	T = log10(u * GAMMA_MINUS1 / BOLTZMANN * PROTONMASS * mu);
-
-	if(T < MinT)
-	  T = MinT;
-	if(T > MaxT)
-	  T = MaxT;
-
-	if(SphP[i].a2.Density > 0)
-	  {
-	    k = (log10(SphP[i].a2.Density) - MinR) / rho_logbin;
-	    if(k < 0)
-	      k = 0;
-	    if(k > RhoBins - 1)
-	      k = RhoBins - 1;
-
-	    j = (T - MinT) / temp_logbin;
-	    if(j < 0)
-	      j = 0;
-	    if(j > TempBins - 1)
-	      j = TempBins - 1;
-
-	    if((Zt = get_metallicity(i, 2)) / 1.77e-3 < 1e-6)
-	      Zt = 1e-6;
-	    if((Zs = SphP[i].Zsmooth) / 1.77e-3 < 1e-6)
-	      Zs = 1e-6;
-	    Ztable[k][j] += (Zs - Zt) / Zt;
-	    Zttable[k][j] += Zt;
-	    Zstable[k][j] += Zs;
-
-	    rho = SphP[i].a2.Density * a3inv * All.UnitDensity_in_cgs * All.HubbleParam * All.HubbleParam;
-	    Ls = CoolingRateFromU(u, rho, &Ne, get_metallicity_solarunits(SphP[i].Zsmooth));
-	    Lt = CoolingRateFromU(u, rho, &Ne, get_metallicity(i, 0));
-	    /*
-	       Ls = CoolingRateGetMetalLambda(T, get_metallicity_solarunits(SphP[i].Zsmooth));
-	       Lt = GetMetalLambda(T, get_metallicity(i, 0));
-	     */
-	    /*
-	       if(Ls != 0)
-	       Ltable[k][j] += (Ls - Lt)/Ls;
-	       else if(Lt != 0)
-	       Ltable[k][j] += (Ls - Lt)/Lt;
-	     */
-	    Ltable[k][j] += (Ls - Lt) / Lt;
-	    Ntable[k][j] += 1;
-	  }
-      }
-
-  MPI_Reduce(&Ztable[0][0], &ZTable[0][0], RhoBins * TempBins, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-  MPI_Reduce(&Zttable[0][0], &ZTTable[0][0], RhoBins * TempBins, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-  MPI_Reduce(&Zstable[0][0], &ZSTable[0][0], RhoBins * TempBins, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-  MPI_Reduce(&Ltable[0][0], &LTable[0][0], RhoBins * TempBins, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-  MPI_Reduce(&Ntable[0][0], &NTable[0][0], RhoBins * TempBins, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
-
-  if(ThisTask == 0)
-    {
-      /* write the infos */
-
-      sprintf(fname, "%s%s_%03d", All.OutputDir, "ZSmooth_info", num);
-      if((file = fopen(fname, "w")) == 0x0)
-	{
-	  printf("acc! an error occurred while creating %s file! anyway, let me to continue..\n", fname);
-	  fflush(stdout);
-	  return;
-	}
-
-      for(k = 0; k < RhoBins; k++)
-	for(j = 0; j < TempBins; j++)
-	  {
-	    if(Ntable[k][j] > 0)
-	      fprintf(file, "%10.8g %10.8g %10.8g %10.8g %10.8g %10.8g\n",
-		      pow(10, MinR + rho_logbin * k) * All.UnitDensity_in_cgs, pow(10,
-										   MinT + temp_logbin * j),
-		      LTable[k][j] / NTable[k][j], ZTable[k][j] / NTable[k][j], ZTTable[k][j] / NTable[k][j],
-		      ZSTable[k][j] / NTable[k][j]);
-	    else
-	      fprintf(file, "%10.8g %10.8g %10.8g %10.8g %10.8g %10.8g\n",
-		      pow(10, MinR + rho_logbin * k) * All.UnitDensity_in_cgs, pow(10,
-										   MinT + temp_logbin * j),
-		      0.0, 0.0, 0.0, 0.0);
-	  }
-      fclose(file);
-    }
-
-  return;
-
-#undef RhoBins
-#undef TempBins
-}
-
-#endif

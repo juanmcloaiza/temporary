@@ -60,37 +60,20 @@ static double fac_intp;
  */
 int force_treebuild(int npart)
 {
-  double t0, t1;
-
-  t0 = second();
-
   Numnodestree = force_treebuild_single(npart);
+
+  force_update_pseudoparticles();
+
   force_flag_localnodes();
 
-  t1 = second();
-  CPU_Step[CPU_TREEBUILD] += timediff(t0, t1);
-  All.Cadj_Cpu += timediff(t0, t1);
-
-
-  force_exchange_pseudodata();
-
-
-  t0 = second();
-
-  force_treeupdate_pseudos(All.MaxPart);
-
   TimeOfLastTreeConstruction = All.Time;
-
-  t1 = second();
-  CPU_Step[CPU_TREEBUILD] += timediff(t0, t1);
-  All.Cadj_Cpu += timediff(t0, t1);
 
   return Numnodestree;
 }
 
 
 
-/*! Constructs the gravitational oct-tree.
+/*! Constructs the gravitational oct-tree.  
  *
  *  The index convention for accessing tree nodes is the following: the
  *  indices 0...NumPart-1 reference single particles, the indices
@@ -109,12 +92,11 @@ int force_treebuild(int npart)
  */
 int force_treebuild_single(int npart)
 {
-  int i, j, subnode = 0, shift, parent, numnodes, rep;
+  int i, j, subnode = 0, parent, numnodes;
   int nfree, th, nn, no;
   struct NODE *nfreep;
-  FLOAT lenhalf;
-  FLOAT minbound[3], maxbound[3];
-  peanokey key, morton, th_key, *morton_list;
+  double lenhalf, epsilon;
+  peanokey key;
 
 
   /* create an empty root node  */
@@ -135,7 +117,7 @@ int force_treebuild_single(int npart)
   /* create a set of empty nodes corresponding to the top-level domain
    * grid. We need to generate these nodes first to make sure that we have a
    * complete top-level tree which allows the easy insertion of the
-   * pseudo-particles at the right place
+   * pseudo-particles at the right place 
    */
 
   force_create_empty_nodes(All.MaxPart, 0, 1, 0, 0, 0, &numnodes, &nfree);
@@ -149,28 +131,23 @@ int force_treebuild_single(int npart)
   nfreep = &Nodes[nfree];
   parent = -1;			/* note: will not be used below before it is changed */
 
-  morton_list = (peanokey *) mymalloc(npart * sizeof(peanokey));
 
   /* now we insert all particles */
   for(i = 0; i < npart; i++)
     {
-      rep = 0;
 
-      key = peano_and_morton_key((int) ((P[i].Pos[0] - DomainCorner[0]) * DomainFac),
-				 (int) ((P[i].Pos[1] - DomainCorner[1]) * DomainFac),
-				 (int) ((P[i].Pos[2] - DomainCorner[2]) * DomainFac), BITS_PER_DIMENSION,
-				 &morton);
-      morton_list[i] = morton;
+      /* the softening is only used to check whether particles are so close
+       * that the tree needs not to be refined further
+       */
+      epsilon = All.ForceSoftening[P[i].Type];
 
-      shift = 3 * (BITS_PER_DIMENSION - 1);
+      key = peano_hilbert_key((P[i].Pos[0] - DomainCorner[0]) * DomainFac,
+			      (P[i].Pos[1] - DomainCorner[1]) * DomainFac,
+			      (P[i].Pos[2] - DomainCorner[2]) * DomainFac, BITS_PER_DIMENSION);
 
       no = 0;
       while(TopNodes[no].Daughter >= 0)
-	{
-	  no = TopNodes[no].Daughter + (key - TopNodes[no].StartKey) / (TopNodes[no].Size / 8);
-	  shift -= 3;
-	  rep++;
-	}
+	no = TopNodes[no].Daughter + (key - TopNodes[no].StartKey) / (TopNodes[no].Size / 8);
 
       no = TopNodes[no].Leaf;
       th = DomainNodeIndex[no];
@@ -179,45 +156,20 @@ int force_treebuild_single(int npart)
 	{
 	  if(th >= All.MaxPart)	/* we are dealing with an internal node */
 	    {
-	      if(shift >= 0)
-		{
-		  subnode = ((morton >> shift) & 7);
-		}
-	      else
-		{
-		  subnode = 0;
-		  if(P[i].Pos[0] > Nodes[th].center[0])
-		    subnode += 1;
-		  if(P[i].Pos[1] > Nodes[th].center[1])
-		    subnode += 2;
-		  if(P[i].Pos[2] > Nodes[th].center[2])
-		    subnode += 4;
-		}
-
-#ifndef NOTREERND
-	      if(Nodes[th].len < 1.0e-3 * All.ForceSoftening[P[i].Type])
-		{
-		  /* seems like we're dealing with particles at identical (or extremely close)
-		   * locations. Randomize subnode index to allow tree construction. Note: Multipole moments
-		   * of tree are still correct, but this will only happen well below gravitational softening
-		   * length-scale anyway.
-		   */
-		  subnode = (int) (8.0 * get_random_number((P[i].ID + rep) % (RNDTABLE + (rep & 3))));
-
-		  if(subnode >= 8)
-		    subnode = 7;
-		}
-#endif
+	      subnode = 0;
+	      if(P[i].Pos[0] > Nodes[th].center[0])
+		subnode += 1;
+	      if(P[i].Pos[1] > Nodes[th].center[1])
+		subnode += 2;
+	      if(P[i].Pos[2] > Nodes[th].center[2])
+		subnode += 4;
 
 	      nn = Nodes[th].u.suns[subnode];
-
-	      shift -= 3;
 
 	      if(nn >= 0)	/* ok, something is in the daughter slot already, need to continue */
 		{
 		  parent = th;
 		  th = nn;
-		  rep++;
 		}
 	      else
 		{
@@ -262,32 +214,24 @@ int force_treebuild_single(int npart)
 	      nfreep->u.suns[6] = -1;
 	      nfreep->u.suns[7] = -1;
 
-	      if(shift >= 0)
-		{
-		  th_key = morton_list[th];
-		  subnode = ((th_key >> shift) & 7);
-		}
-	      else
-		{
-		  subnode = 0;
-		  if(P[th].Pos[0] > nfreep->center[0])
-		    subnode += 1;
-		  if(P[th].Pos[1] > nfreep->center[1])
-		    subnode += 2;
-		  if(P[th].Pos[2] > nfreep->center[2])
-		    subnode += 4;
-		}
 
+	      subnode = 0;
+	      if(P[th].Pos[0] > nfreep->center[0])
+		subnode += 1;
+	      if(P[th].Pos[1] > nfreep->center[1])
+		subnode += 2;
+	      if(P[th].Pos[2] > nfreep->center[2])
+		subnode += 4;
 #ifndef NOTREERND
-	      if(nfreep->len < 1.0e-3 * All.ForceSoftening[P[th].Type])
+	      if(nfreep->len < 1.0e-3 * epsilon)
 		{
 		  /* seems like we're dealing with particles at identical (or extremely close)
 		   * locations. Randomize subnode index to allow tree construction. Note: Multipole moments
 		   * of tree are still correct, but this will only happen well below gravitational softening
 		   * length-scale anyway.
 		   */
-		  subnode = (int) (8.0 * get_random_number((P[th].ID + rep) % (RNDTABLE + (rep & 3))));
-
+		  subnode = (int) (8.0 * get_random_number((0xffff & P[i].ID) + P[i].GravCost));
+		  P[i].GravCost += 1;
 		  if(subnode >= 8)
 		    subnode = 7;
 		}
@@ -313,8 +257,6 @@ int force_treebuild_single(int npart)
 	}
     }
 
-  myfree(morton_list);
-
 
   /* insert the pseudo particles that represent the mass distribution of other domains */
   force_insert_pseudo_particles();
@@ -323,7 +265,7 @@ int force_treebuild_single(int npart)
   /* now compute the multipole moments recursively */
   last = -1;
 
-  force_update_node_recursive(All.MaxPart, -1, -1, minbound, maxbound);
+  force_update_node_recursive(All.MaxPart, -1, -1);
 
   if(last >= All.MaxPart)
     {
@@ -342,16 +284,15 @@ int force_treebuild_single(int npart)
 
 /*! This function recursively creates a set of empty tree nodes which
  *  corresponds to the top-level tree for the domain grid. This is done to
- *  ensure that this top-level tree is always "complete" so that we can easily
- *  associate the pseudo-particles of other CPUs with tree-nodes at a given
- *  level in the tree, even when the particle population is so sparse that
- *  some of these nodes are actually empty.
+ *  ensure that this top-level tree is always "complete" so that we can
+ *  easily associate the pseudo-particles of other CPUs with tree-nodes at
+ *  a given level in the tree, even when the particle population is so
+ *  sparse that some of these nodes are actually empty.
 */
 void force_create_empty_nodes(int no, int topnode, int bits, int x, int y, int z, int *nodecount,
 			      int *nextfree)
 {
   int i, j, k, n, sub, count;
-  FLOAT lenhalf;
 
   if(TopNodes[topnode].Daughter >= 0)
     {
@@ -365,11 +306,11 @@ void force_create_empty_nodes(int no, int topnode, int bits, int x, int y, int z
 
 	      Nodes[no].u.suns[count] = *nextfree;
 
-	      lenhalf = 0.25 * Nodes[no].len;
+
 	      Nodes[*nextfree].len = 0.5 * Nodes[no].len;
-	      Nodes[*nextfree].center[0] = Nodes[no].center[0] + (2 * i - 1) * lenhalf;
-	      Nodes[*nextfree].center[1] = Nodes[no].center[1] + (2 * j - 1) * lenhalf;
-	      Nodes[*nextfree].center[2] = Nodes[no].center[2] + (2 * k - 1) * lenhalf;
+	      Nodes[*nextfree].center[0] = Nodes[no].center[0] + (2 * i - 1) * 0.25 * Nodes[no].len;
+	      Nodes[*nextfree].center[1] = Nodes[no].center[1] + (2 * j - 1) * 0.25 * Nodes[no].len;
+	      Nodes[*nextfree].center[2] = Nodes[no].center[2] + (2 * k - 1) * 0.25 * Nodes[no].len;
 
 	      for(n = 0; n < 8; n++)
 		Nodes[*nextfree].u.suns[n] = -1;
@@ -380,10 +321,9 @@ void force_create_empty_nodes(int no, int topnode, int bits, int x, int y, int z
 	      *nextfree = *nextfree + 1;
 	      *nodecount = *nodecount + 1;
 
-	      if((*nodecount) >= MaxNodes || (*nodecount) >= MAXTOPNODES)
+	      if((*nodecount) >= MaxNodes)
 		{
-		  printf("task %d: maximum number %d/%d of tree-nodes reached.\n", ThisTask, MaxNodes,
-			 MAXTOPNODES);
+		  printf("task %d: maximum number %d of tree-nodes reached.\n", ThisTask, MaxNodes);
 		  printf("in create empty nodes\n");
 		  dump_particles();
 		  endrun(11);
@@ -399,9 +339,9 @@ void force_create_empty_nodes(int no, int topnode, int bits, int x, int y, int z
 
 /*! this function inserts pseudo-particles which will represent the mass
  *  distribution of the other CPUs. Initially, the mass of the
- *  pseudo-particles is set to zero, and their coordinate is set to the center
- *  of the domain-cell they correspond to. These quantities will be updated
- *  later on.
+ *  pseudo-particles is set to zero, and their coordinate is set to the
+ *  center of the domain-cell they correspond to. These quantities will be
+ *  updated later on.
  */
 void force_insert_pseudo_particles(void)
 {
@@ -446,8 +386,8 @@ void force_insert_pseudo_particles(void)
 		    }
 		  else
 		    {
-		      /* here we have found an empty slot where we can
-		       * attach the pseudo particle as a leaf
+		      /* here we have found an empty slot where we can 
+		       * attach the pseudo particle as a leaf 
 		       */
 		      Nodes[th].u.suns[subnode] = All.MaxPart + MaxNodes + i;
 
@@ -473,19 +413,16 @@ void force_insert_pseudo_particles(void)
  *  belongs to the top-level tree corresponding to the domain
  *  decomposition, while Bit 1 signals whether the top-level node is
  *  dependent on local mass.
- *
+ * 
  *  If UNEQUALSOFTENINGS is set, bits 2-4 give the particle type with
  *  the maximum softening among the particles in the node, and bit 5
  *  flags whether the node contains any particles with lower softening
- *  than that.
+ *  than that.  
  */
-void force_update_node_recursive(int no, int sib, int father, FLOAT * minbound, FLOAT * maxbound)
+void force_update_node_recursive(int no, int sib, int father)
 {
-  int j, jj, k, p, pp, nextsib, suns[8], count_daughters, count_particles, multiple_flag, flag_single;
-  FLOAT hmax, lenmax;
-  FLOAT single_s[3], single_mass = 0;
-  FLOAT s[3], mass;
-  FLOAT mindaughter[3], maxdaughter[3];
+  int j, jj, p, pp, nextsib, suns[8];
+  FLOAT hmax;
 
 #ifdef UNEQUALSOFTENINGS
 #ifndef ADAPTIVE_GRAVSOFT_FORGAS
@@ -495,16 +432,10 @@ void force_update_node_recursive(int no, int sib, int father, FLOAT * minbound, 
 #endif
 #endif
   struct particle_data *pa;
-
+  double s[3], vs[3], mass;
 
   if(no >= All.MaxPart && no < All.MaxPart + MaxNodes)	/* internal node */
     {
-      for(k = 0; k < 3; k++)
-	{
-	  minbound[k] = MAX_REAL_NUMBER;
-	  maxbound[k] = -MAX_REAL_NUMBER;
-	}
-
       for(j = 0; j < 8; j++)
 	suns[j] = Nodes[no].u.suns[j];	/* this "backup" is necessary because the nextnode entry will
 					   overwrite one element (union!) */
@@ -527,11 +458,10 @@ void force_update_node_recursive(int no, int sib, int father, FLOAT * minbound, 
       s[0] = 0;
       s[1] = 0;
       s[2] = 0;
+      vs[0] = 0;
+      vs[1] = 0;
+      vs[2] = 0;
       hmax = 0;
-      count_daughters = 0;
-      count_particles = 0;
-      flag_single = 0;
-
 #ifdef UNEQUALSOFTENINGS
 #ifndef ADAPTIVE_GRAVSOFT_FORGAS
       maxsofttype = 7;
@@ -555,7 +485,8 @@ void force_update_node_recursive(int no, int sib, int father, FLOAT * minbound, 
 	      else
 		nextsib = sib;
 
-	      force_update_node_recursive(p, nextsib, no, mindaughter, maxdaughter);
+	      force_update_node_recursive(p, nextsib, no);
+
 
 	      if(p >= All.MaxPart)	/* an internal node or pseudo particle */
 		{
@@ -568,43 +499,16 @@ void force_update_node_recursive(int no, int sib, int father, FLOAT * minbound, 
 		    }
 		  else
 		    {
-		      count_daughters++;
-
-		      if(flag_single == 0)
-			{
-			  single_s[0] = Nodes[p].u.d.s[0];
-			  single_s[1] = Nodes[p].u.d.s[1];
-			  single_s[2] = Nodes[p].u.d.s[2];
-			  single_mass = Nodes[p].u.d.mass;
-			}
-
-		      mass += (Nodes[p].u.d.mass);
-		      s[0] += (Nodes[p].u.d.mass * Nodes[p].u.d.s[0]);
-		      s[1] += (Nodes[p].u.d.mass * Nodes[p].u.d.s[1]);
-		      s[2] += (Nodes[p].u.d.mass * Nodes[p].u.d.s[2]);
-
-		      if(Nodes[p].u.d.mass > 0)
-			{
-			  flag_single++;
-
-			  if((Nodes[p].u.d.bitflags & 128))
-			    count_particles += 2;
-			  else
-			    count_particles++;
-			}
-
+		      mass += Nodes[p].u.d.mass;
+		      s[0] += Nodes[p].u.d.mass * Nodes[p].u.d.s[0];
+		      s[1] += Nodes[p].u.d.mass * Nodes[p].u.d.s[1];
+		      s[2] += Nodes[p].u.d.mass * Nodes[p].u.d.s[2];
+		      vs[0] += Nodes[p].u.d.mass * Extnodes[p].vs[0];
+		      vs[1] += Nodes[p].u.d.mass * Extnodes[p].vs[1];
+		      vs[2] += Nodes[p].u.d.mass * Extnodes[p].vs[2];
 
 		      if(Extnodes[p].hmax > hmax)
 			hmax = Extnodes[p].hmax;
-
-		      for(k = 0; k < 3; k++)
-			{
-			  if(minbound[k] > mindaughter[k])
-			    minbound[k] = mindaughter[k];
-
-			  if(maxbound[k] < maxdaughter[k])
-			    maxbound[k] = maxdaughter[k];
-			}
 
 #ifdef UNEQUALSOFTENINGS
 #ifndef ADAPTIVE_GRAVSOFT_FORGAS
@@ -641,22 +545,15 @@ void force_update_node_recursive(int no, int sib, int father, FLOAT * minbound, 
 		}
 	      else		/* a particle */
 		{
-		  count_daughters++;
-
 		  pa = &P[p];
-		  if(flag_single == 0)
-		    {
-		      single_s[0] = pa->Pos[0];
-		      single_s[1] = pa->Pos[1];
-		      single_s[2] = pa->Pos[2];
-		      single_mass = pa->Mass;
-		    }
-		  flag_single++;
 
-		  mass += (pa->Mass);
-		  s[0] += (pa->Mass * pa->Pos[0]);
-		  s[1] += (pa->Mass * pa->Pos[1]);
-		  s[2] += (pa->Mass * pa->Pos[2]);
+		  mass += pa->Mass;
+		  s[0] += pa->Mass * pa->Pos[0];
+		  s[1] += pa->Mass * pa->Pos[1];
+		  s[2] += pa->Mass * pa->Pos[2];
+		  vs[0] += pa->Mass * pa->Vel[0];
+		  vs[1] += pa->Mass * pa->Vel[1];
+		  vs[2] += pa->Mass * pa->Vel[2];
 
 #ifdef UNEQUALSOFTENINGS
 #ifndef ADAPTIVE_GRAVSOFT_FORGAS
@@ -680,13 +577,8 @@ void force_update_node_recursive(int no, int sib, int father, FLOAT * minbound, 
 #else
 		  if(pa->Type == 0)
 		    {
-#ifdef ADAPTIVE_GRAVSOFT_FORGAS_HSML
-		      if(dmin(All.SofteningTable[P[i].Type],ADAPTIVE_GRAVSOFT_FORGAS_HSML * PPP[i].Hsml) > maxsoft)
-			maxsoft = dmin(All.SofteningTable[P[i].Type],ADAPTIVE_GRAVSOFT_FORGAS_HSML * PPP[i].Hsml);
-#else
-		      if(All.ForceSoftening[0] * pow(pa->Mass / All.ReferenceGasMass, 1.0 / 3) > maxsoft)
-			maxsoft = All.ForceSoftening[0] * pow(pa->Mass / All.ReferenceGasMass, 1.0 / 3);
-#endif
+		      if(SphP[p].Hsml > maxsoft)
+			maxsoft = SphP[p].Hsml;
 		    }
 		  else
 		    {
@@ -696,19 +588,8 @@ void force_update_node_recursive(int no, int sib, int father, FLOAT * minbound, 
 #endif
 #endif
 		  if(pa->Type == 0)
-		    if(PPP[p].Hsml > hmax)
-		      hmax = PPP[p].Hsml;
-
-		  for(k = 0; k < 3; k++)
-		    {
-		      if(minbound[k] > pa->Pos[k])
-			minbound[k] = pa->Pos[k];
-
-		      if(maxbound[k] < pa->Pos[k])
-			maxbound[k] = pa->Pos[k];
-		    }
-
-		  count_particles++;
+		    if(SphP[p].Hsml > hmax)
+		      hmax = SphP[p].Hsml;
 		}
 	    }
 	}
@@ -719,6 +600,9 @@ void force_update_node_recursive(int no, int sib, int father, FLOAT * minbound, 
 	  s[0] /= mass;
 	  s[1] /= mass;
 	  s[2] /= mass;
+	  vs[0] /= mass;
+	  vs[1] /= mass;
+	  vs[2] /= mass;
 	}
       else
 	{
@@ -727,49 +611,28 @@ void force_update_node_recursive(int no, int sib, int father, FLOAT * minbound, 
 	  s[2] = Nodes[no].center[2];
 	}
 
-      if(flag_single == 1)
-	{
-	  Nodes[no].u.d.s[0] = single_s[0];
-	  Nodes[no].u.d.s[1] = single_s[1];
-	  Nodes[no].u.d.s[2] = single_s[2];
-	  Nodes[no].u.d.mass = single_mass;
-	}
-      else
-	{
-	  Nodes[no].u.d.s[0] = s[0];
-	  Nodes[no].u.d.s[1] = s[1];
-	  Nodes[no].u.d.s[2] = s[2];
-	  Nodes[no].u.d.mass = mass;
-	}
+      Nodes[no].u.d.s[0] = s[0];
+      Nodes[no].u.d.s[1] = s[1];
+      Nodes[no].u.d.s[2] = s[2];
+      Nodes[no].u.d.mass = mass;
 
-      for(k = 0, lenmax = Nodes[no].len; k < 3; k++)
-	{
-	  if(lenmax < 2.0 * (Nodes[no].center[k] - minbound[k]))
-	    lenmax = 2.0 * (Nodes[no].center[k] - minbound[k]);
-	  if(lenmax < 2.0 * (maxbound[k] - Nodes[no].center[k]))
-	    lenmax = 2.0 * (maxbound[k] - Nodes[no].center[k]);
-	}
-
-      Nodes[no].len = lenmax;
-
-      Extnodes[no].hmax = hmax;
-
-      if(count_particles > 1)	/* this flags that the node represents more than one particle */
-	multiple_flag = 1;
-      else
-	multiple_flag = 0;
 
 #ifdef UNEQUALSOFTENINGS
 #ifndef ADAPTIVE_GRAVSOFT_FORGAS
-      Nodes[no].u.d.bitflags =
-	4 * maxsofttype + 32 * diffsoftflag + 128 * multiple_flag + 256 * count_daughters;
+      Nodes[no].u.d.bitflags = 4 * maxsofttype + 32 * diffsoftflag;
 #else
-      Nodes[no].u.d.bitflags = 128 * multiple_flag + 256 * count_daughters;
+      Nodes[no].u.d.bitflags = 0;
       Nodes[no].maxsoft = maxsoft;
 #endif
 #else
-      Nodes[no].u.d.bitflags = 128 * multiple_flag + 256 * count_daughters;
+      Nodes[no].u.d.bitflags = 0;
 #endif
+
+
+      Extnodes[no].vs[0] = vs[0];
+      Extnodes[no].vs[1] = vs[1];
+      Extnodes[no].vs[2] = vs[2];
+      Extnodes[no].hmax = hmax;
 
       Nodes[no].u.d.sibling = sib;
       Nodes[no].u.d.father = father;
@@ -799,6 +662,19 @@ void force_update_node_recursive(int no, int sib, int father, FLOAT * minbound, 
 
 
 
+/*! This function updates the multipole moments of the pseudo-particles
+ *  that represent the mass distribution on different CPUs. For that
+ *  purpose, it first exchanges the necessary data, and then updates the
+ *  top-level tree accordingly. The detailed implementation of these two
+ *  tasks is done in separate functions.
+ */
+void force_update_pseudoparticles(void)
+{
+  force_exchange_pseudodata();
+
+  force_treeupdate_pseudos();
+}
+
 
 
 /*! This function communicates the values of the multipole moments of the
@@ -807,11 +683,9 @@ void force_update_node_recursive(int no, int sib, int father, FLOAT * minbound, 
  */
 void force_exchange_pseudodata(void)
 {
-  int i, no, recvTask;
-  int *recvcounts, *recvoffset;
-  double t0, t1;
-
-  t0 = second();
+  int i, no;
+  MPI_Status status;
+  int level, sendTask, recvTask;
 
   for(i = DomainMyStart; i <= DomainMyLast; i++)
     {
@@ -821,78 +695,44 @@ void force_exchange_pseudodata(void)
       DomainMoment[i].s[0] = Nodes[no].u.d.s[0];
       DomainMoment[i].s[1] = Nodes[no].u.d.s[1];
       DomainMoment[i].s[2] = Nodes[no].u.d.s[2];
+      DomainMoment[i].vs[0] = Extnodes[no].vs[0];
+      DomainMoment[i].vs[1] = Extnodes[no].vs[1];
+      DomainMoment[i].vs[2] = Extnodes[no].vs[2];
       DomainMoment[i].mass = Nodes[no].u.d.mass;
-      DomainMoment[i].len = Nodes[no].len;
+#ifdef UNEQUALSOFTENINGS
+#ifndef ADAPTIVE_GRAVSOFT_FORGAS
       DomainMoment[i].bitflags = Nodes[no].u.d.bitflags;
-#ifdef ADAPTIVE_GRAVSOFT_FORGAS
+#else
       DomainMoment[i].maxsoft = Nodes[no].maxsoft;
+#endif
 #endif
     }
 
   /* share the pseudo-particle data accross CPUs */
 
-    recvcounts = (int *)mymalloc(sizeof(int) * NTask);
-    recvoffset = (int *)mymalloc(sizeof(int) * NTask);
-
-  for(recvTask = 0; recvTask < NTask; recvTask++)
+  for(level = 1; level < (1 << PTask); level++)
     {
-      recvcounts[recvTask] =
-	(DomainEndList[recvTask] - DomainStartList[recvTask] + 1) * sizeof(struct DomainNODE);
-      recvoffset[recvTask] = DomainStartList[recvTask] * sizeof(struct DomainNODE);
+      sendTask = ThisTask;
+      recvTask = ThisTask ^ level;
+
+      if(recvTask < NTask)
+	MPI_Sendrecv(&DomainMoment[DomainStartList[sendTask]],
+		     (DomainEndList[sendTask] - DomainStartList[sendTask] + 1) * sizeof(struct DomainNODE),
+		     MPI_BYTE, recvTask, TAG_DMOM,
+		     &DomainMoment[DomainStartList[recvTask]],
+		     (DomainEndList[recvTask] - DomainStartList[recvTask] + 1) * sizeof(struct DomainNODE),
+		     MPI_BYTE, recvTask, TAG_DMOM, MPI_COMM_WORLD, &status);
     }
 
-  t1 = second();
-  CPU_Step[CPU_TREEBUILD] += timediff(t0, t1);
-  All.Cadj_Cpu += timediff(t0, t1);
-  MPI_Barrier(MPI_COMM_WORLD);
-  t0 = second();
-
-
-  MPI_Allgatherv(&DomainMoment[DomainStartList[ThisTask]], recvcounts[ThisTask], MPI_BYTE,
-		 &DomainMoment[0], recvcounts, recvoffset, MPI_BYTE, MPI_COMM_WORLD);
-
-
-  t1 = second();
-  CPU_Step[CPU_TREECOMM] += timediff(t0, t1);
-  t0 = second();
-
-
-  myfree(recvoffset);
-  myfree(recvcounts);
-
-  for(i = 0; i <= DomainEndList[NTask - 1]; i++)
-    {
-      if(i < DomainMyStart || i > DomainMyLast)
-	{
-	  no = DomainNodeIndex[i];
-
-	  Nodes[no].u.d.s[0] = DomainMoment[i].s[0];
-	  Nodes[no].u.d.s[1] = DomainMoment[i].s[1];
-	  Nodes[no].u.d.s[2] = DomainMoment[i].s[2];
-	  Nodes[no].u.d.mass = DomainMoment[i].mass;
-	  Nodes[no].len = DomainMoment[i].len;
-	  Nodes[no].u.d.bitflags =
-	    (Nodes[no].u.d.bitflags & (~((15 << 2) + 128))) | (DomainMoment[i].bitflags & ((15 << 2) + 128));
-#ifdef ADAPTIVE_GRAVSOFT_FORGAS
-	  Nodes[no].maxsoft = DomainMoment[i].maxsoft;
-#endif
-	}
-    }
-
-  t1 = second();
-  CPU_Step[CPU_TREEBUILD] += timediff(t0, t1);
-  All.Cadj_Cpu += timediff(t0, t1);
 }
 
 /*! This function updates the top-level tree after the multipole moments of
  *  the pseudo-particles have been updated.
  */
-void force_treeupdate_pseudos(int no)
+void force_treeupdate_pseudos(void)
 {
-  int j, p, flag_single, count_daughters, count_particles, multiple_flag;
-  FLOAT hmax;
-  FLOAT s[3], mass;
-  FLOAT single_s[3], single_mass = 0;
+  int i, k, no;
+  FLOAT sold[3], vsold[3], snew[3], vsnew[3], massold, massnew, mm;
 
 #ifdef UNEQUALSOFTENINGS
 #ifndef ADAPTIVE_GRAVSOFT_FORGAS
@@ -902,143 +742,88 @@ void force_treeupdate_pseudos(int no)
 #endif
 #endif
 
-  mass = 0;
-  s[0] = 0;
-  s[1] = 0;
-  s[2] = 0;
-  hmax = 0;
-  flag_single = 0;
-  count_particles = 0;
+  for(i = 0; i < NTopleaves; i++)
+    if(i < DomainMyStart || i > DomainMyLast)
+      {
+	no = DomainNodeIndex[i];
+
+	for(k = 0; k < 3; k++)
+	  {
+	    sold[k] = Nodes[no].u.d.s[k];
+	    vsold[k] = Extnodes[no].vs[k];
+	  }
+	massold = Nodes[no].u.d.mass;
+
+	for(k = 0; k < 3; k++)
+	  {
+	    snew[k] = DomainMoment[i].s[k];
+	    vsnew[k] = DomainMoment[i].vs[k];
+	  }
+	massnew = DomainMoment[i].mass;
+
+
 #ifdef UNEQUALSOFTENINGS
 #ifndef ADAPTIVE_GRAVSOFT_FORGAS
-  maxsofttype = 7;
-  diffsoftflag = 0;
+	maxsofttype = (DomainMoment[i].bitflags >> 2) & 7;
+	diffsoftflag = (DomainMoment[i].bitflags >> 5) & 1;
 #else
-  maxsoft = 0;
+	maxsoft = DomainMoment[i].maxsoft;
 #endif
 #endif
+	do
+	  {
+	    mm = Nodes[no].u.d.mass + massnew - massold;
+	    for(k = 0; k < 3; k++)
+	      {
+		if(mm > 0)
+		  {
+		    Nodes[no].u.d.s[k] =
+		      (Nodes[no].u.d.mass * Nodes[no].u.d.s[k] + massnew * snew[k] - massold * sold[k]) / mm;
+		    Extnodes[no].vs[k] =
+		      (Nodes[no].u.d.mass * Extnodes[no].vs[k] + massnew * vsnew[k] -
+		       massold * vsold[k]) / mm;
+		  }
+	      }
+	    Nodes[no].u.d.mass = mm;
 
-  count_daughters = ((Nodes[no].u.d.bitflags >> 8) & 15);
-
-  p = Nodes[no].u.d.nextnode;
-
-  for(j = 0; j < count_daughters; j++)
-    {
-      if(p >= All.MaxPart && p < All.MaxPart + MaxNodes)	/* internal node */
-	{
-	  if(Nodes[p].u.d.bitflags & 64)
-	    force_treeupdate_pseudos(p);
-
-	  if(flag_single == 0)
-	    {
-	      single_s[0] = Nodes[p].u.d.s[0];
-	      single_s[1] = Nodes[p].u.d.s[1];
-	      single_s[2] = Nodes[p].u.d.s[2];
-	      single_mass = Nodes[p].u.d.mass;
-	    }
-
-	  mass += (Nodes[p].u.d.mass);
-	  s[0] += (Nodes[p].u.d.mass * Nodes[p].u.d.s[0]);
-	  s[1] += (Nodes[p].u.d.mass * Nodes[p].u.d.s[1]);
-	  s[2] += (Nodes[p].u.d.mass * Nodes[p].u.d.s[2]);
-	  if(Extnodes[p].hmax > hmax)
-	    hmax = Extnodes[p].hmax;
-
-	  if(Nodes[p].u.d.mass > 0)
-	    {
-	      flag_single++;
-
-	      if((Nodes[p].u.d.bitflags & 128))
-		count_particles += 2;
-	      else
-		count_particles++;
-	    }
 
 #ifdef UNEQUALSOFTENINGS
 #ifndef ADAPTIVE_GRAVSOFT_FORGAS
-	  diffsoftflag |= (Nodes[p].u.d.bitflags >> 5) & 1;
+	    diffsoftflag |= (Nodes[no].u.d.bitflags >> 5) & 1;
 
-	  if(maxsofttype == 7)
-	    {
-	      maxsofttype = (Nodes[p].u.d.bitflags >> 2) & 7;
-	    }
-	  else
-	    {
-	      if(((Nodes[p].u.d.bitflags >> 2) & 7) != 7)
-		{
-		  if(All.ForceSoftening[((Nodes[p].u.d.bitflags >> 2) & 7)] > All.ForceSoftening[maxsofttype])
-		    {
-		      maxsofttype = ((Nodes[p].u.d.bitflags >> 2) & 7);
-		      diffsoftflag = 1;
-		    }
-		  else
-		    {
-		      if(All.ForceSoftening[((Nodes[p].u.d.bitflags >> 2) & 7)] <
-			 All.ForceSoftening[maxsofttype])
+	    if(maxsofttype == 7)
+	      maxsofttype = (Nodes[no].u.d.bitflags >> 2) & 7;
+	    else
+	      {
+		if(((Nodes[no].u.d.bitflags >> 2) & 7) != 7)
+		  {
+		    if(All.ForceSoftening[((Nodes[no].u.d.bitflags >> 2) & 7)] >
+		       All.ForceSoftening[maxsofttype])
+		      {
+			maxsofttype = ((Nodes[no].u.d.bitflags >> 2) & 7);
 			diffsoftflag = 1;
-		    }
-		}
-	    }
+		      }
+		    else
+		      {
+			if(All.ForceSoftening[((Nodes[no].u.d.bitflags >> 2) & 7)] <
+			   All.ForceSoftening[maxsofttype])
+			  diffsoftflag = 1;
+		      }
+		  }
+	      }
+
+	    Nodes[no].u.d.bitflags = (Nodes[no].u.d.bitflags & 3) + 4 * maxsofttype + 32 * diffsoftflag;
 #else
-	  if(Nodes[p].maxsoft > maxsoft)
-	    maxsoft = Nodes[p].maxsoft;
+	    if(Nodes[no].maxsoft < maxsoft)
+	      Nodes[no].maxsoft = maxsoft;
+	    maxsoft = Nodes[no].maxsoft;
 #endif
 #endif
-	}
-      else
-	endrun(6767);		/* may not happen */
+	    no = Nodes[no].u.d.father;
 
-      p = Nodes[p].u.d.sibling;
-    }
-
-  if(flag_single == 1)
-    {
-      Nodes[no].u.d.s[0] = single_s[0];
-      Nodes[no].u.d.s[1] = single_s[1];
-      Nodes[no].u.d.s[2] = single_s[2];
-      Nodes[no].u.d.mass = single_mass;
-    }
-  else
-    {
-      if(mass)
-	{
-	  s[0] /= mass;
-	  s[1] /= mass;
-	  s[2] /= mass;
-	}
-      else
-	{
-	  s[0] = Nodes[no].center[0];
-	  s[1] = Nodes[no].center[1];
-	  s[2] = Nodes[no].center[2];
-	}
-
-      Nodes[no].u.d.s[0] = s[0];
-      Nodes[no].u.d.s[1] = s[1];
-      Nodes[no].u.d.s[2] = s[2];
-      Nodes[no].u.d.mass = mass;
-    }
-
-  Extnodes[no].hmax = hmax;
-
-  if(count_particles > 1)
-    multiple_flag = 1;
-  else
-    multiple_flag = 0;
-
-
-#ifdef UNEQUALSOFTENINGS
-#ifndef ADAPTIVE_GRAVSOFT_FORGAS
-  Nodes[no].u.d.bitflags =
-    (Nodes[no].u.d.bitflags & (~(4 * 7 + 32 + 128))) + 4 * maxsofttype + 32 * diffsoftflag +
-    128 * multiple_flag;
-#else
-  Nodes[no].u.d.bitflags = (Nodes[no].u.d.bitflags & (~128)) + 128 * multiple_flag;
-  Nodes[no].maxsoft = maxsoft;
-#endif
-#else
-  Nodes[no].u.d.bitflags = (Nodes[no].u.d.bitflags & (~128)) + 128 * multiple_flag;
-#endif
+	  }
+	while(no >= 0);
+      }
 }
 
 
@@ -1056,8 +841,6 @@ void force_flag_localnodes(void)
     {
       no = DomainNodeIndex[i];
 
-      Nodes[no].u.d.bitflags |= (i << 12);
-
       while(no >= 0)
 	{
 	  if((Nodes[no].u.d.bitflags & 1))
@@ -1067,399 +850,268 @@ void force_flag_localnodes(void)
 
 	  no = Nodes[no].u.d.father;
 	}
-
-      /* mark also internal top level nodes */
-
-      no = DomainNodeIndex[i];
-      no = Nodes[no].u.d.father;
-
-      while(no >= 0)
-	{
-	  if((Nodes[no].u.d.bitflags & 64))
-	    break;
-
-	  Nodes[no].u.d.bitflags |= 64;
-
-	  no = Nodes[no].u.d.father;
-	}
     }
 
   /* mark top-level nodes that contain local particles */
 
   for(i = DomainMyStart; i <= DomainMyLast; i++)
     {
-      no = DomainNodeIndex[i];
+      /*
+         if(DomainMoment[i].mass > 0)
+       */
+      {
+	no = DomainNodeIndex[i];
 
-      while(no >= 0)
-	{
-	  if((Nodes[no].u.d.bitflags & 2))
-	    break;
+	while(no >= 0)
+	  {
+	    if((Nodes[no].u.d.bitflags & 2))
+	      break;
 
-	  Nodes[no].u.d.bitflags |= 2;
+	    Nodes[no].u.d.bitflags |= 2;
 
-	  no = Nodes[no].u.d.father;
-	}
+	    no = Nodes[no].u.d.father;
+	  }
+      }
     }
 }
 
 
-/*! When a new additional star particle is created, we can put it into the
- *  tree at the position of the spawning gas particle. This is possible
- *  because the Nextnode[] array essentially describes the full tree walk as a
- *  link list. Multipole moments of tree nodes need not be changed.
+
+/*! This function updates the side-length of tree nodes in case the tree is
+ *  not reconstructed, but only drifted.  The grouping of particles to tree
+ *  nodes is not changed in this case, but some tree nodes may need to be
+ *  enlarged because particles moved out of their original bounds.
  */
-void force_add_star_to_tree(int igas, int istar)
+void force_update_len(void)
 {
-  int no;
+  int i, no;
+  MPI_Status status;
+  int level, sendTask, recvTask;
 
-  no = Nextnode[igas];
-  Nextnode[igas] = istar;
-  Nextnode[istar] = no;
-  Father[istar] = Father[igas];
-  Nodes[Father[istar]].u.d.bitflags |= 128;
-  Nodes[Father[istar]].u.d.bitflags += 256;
-}
+  force_update_node_len_local();
 
-
-void force_dynamic_update(void)
-{
-  int i, k, no;
-  FLOAT minbound[3], maxbound[3];
-  double t0, t1;
-
-  t0 = second();
-
+  /* first update the side-lengths of all local nodes */
   for(i = DomainMyStart; i <= DomainMyLast; i++)
     {
       no = DomainNodeIndex[i];
 
-      force_dynamic_update_node(no, 0, minbound, maxbound);
-
-      for(k = 0; k < 3; k++)
-	{
-	  DomainMoment[i].minbound[k] = minbound[k];
-	  DomainMoment[i].maxbound[k] = maxbound[k];
-	}
+      DomainTreeNodeLen[i] = Nodes[no].len;
     }
 
-  t1 = second();
-  CPU_Step[CPU_TREEUPDATE] += timediff(t0, t1);
-  All.Cadj_Cpu += timediff(t0, t1);
+  for(level = 1; level < (1 << PTask); level++)
+    {
+      sendTask = ThisTask;
+      recvTask = ThisTask ^ level;
 
+      if(recvTask < NTask)
+	MPI_Sendrecv(&DomainTreeNodeLen[DomainStartList[sendTask]],
+		     (DomainEndList[sendTask] - DomainStartList[sendTask] + 1) * sizeof(FLOAT),
+		     MPI_BYTE, recvTask, TAG_NODELEN,
+		     &DomainTreeNodeLen[DomainStartList[recvTask]],
+		     (DomainEndList[recvTask] - DomainStartList[recvTask] + 1) * sizeof(FLOAT),
+		     MPI_BYTE, recvTask, TAG_NODELEN, MPI_COMM_WORLD, &status);
+    }
 
-  force_exchange_pseudodata();
-
-
-  t0 = second();
-
-  force_dynamic_update_node(All.MaxPart, 1, minbound, maxbound);
-
-  t1 = second();
-  CPU_Step[CPU_TREEUPDATE] += timediff(t0, t1);
-  All.Cadj_Cpu += timediff(t0, t1);
+  /* Finally, we update the top-level tree. */
+  force_update_node_len_toptree();
 }
 
 
-
-void force_dynamic_update_node(int no, int mode, FLOAT * minbound, FLOAT * maxbound)
+/*! This function recursively enlarges nodes such that they always contain
+ *  all their daughter nodes and daughter particles.
+ */
+void force_update_node_len_local(void)
 {
-  int i, j, k, p, single_count, count_daughters;
-  FLOAT hmax, lenmax;
-  FLOAT single_s[3], single_mass = 0;
-  FLOAT s[3], mass;
-  FLOAT mindaughter[3], maxdaughter[3];
-  struct particle_data *pa;
+  int i, p, k, no;
+  FLOAT dist, distmax;
 
-
-  if(no >= All.MaxPart && no < All.MaxPart + MaxNodes)	/* internal node */
+  for(i = 0; i < NumPart; i++)
     {
-      mass = 0;
-      s[0] = 0;
-      s[1] = 0;
-      s[2] = 0;
-      hmax = 0;
-      single_count = 0;
+      no = Father[i];
 
-      for(k = 0; k < 3; k++)
+      for(k = 0, distmax = 0; k < 3; k++)
 	{
-	  minbound[k] = MAX_REAL_NUMBER;
-	  maxbound[k] = -MAX_REAL_NUMBER;
+	  dist = P[i].Pos[k] - Nodes[no].center[k];
+	  if(dist < 0)
+	    dist = -dist;
+	  if(dist > distmax)
+	    distmax = dist;
 	}
 
-      count_daughters = ((Nodes[no].u.d.bitflags >> 8) & 15);
-
-      p = Nodes[no].u.d.nextnode;
-
-      for(j = 0; j < count_daughters; j++)
+      if(distmax + distmax > Nodes[no].len)
 	{
-	  if(p >= All.MaxPart)	/* an internal node or pseudo particle */
+	  Nodes[no].len = distmax + distmax;
+	  p = Nodes[no].u.d.father;
+
+	  while(p >= 0)
 	    {
-	      if(p >= All.MaxPart + MaxNodes)	/* a pseudo particle */
+	      distmax = Nodes[p].center[0] - Nodes[no].center[0];
+	      if(distmax < 0)
+		distmax = -distmax;
+	      distmax = distmax + distmax + Nodes[no].len;
+
+	      if(0.999999 * distmax > Nodes[p].len)
 		{
-		  /* nothing to be done here because the mass of the
-		   * pseudo-particle is still zero. This will be changed
-		   * later.
-		   */
-		  endrun(2000);	/* should not occur */
+		  Nodes[p].len = distmax;
+		  no = p;
+		  p = Nodes[p].u.d.father;
 		}
 	      else
-		{
-		  if(mode == 0 || (mode == 1 && (Nodes[p].u.d.bitflags & 64)))
-		    force_dynamic_update_node(p, mode, mindaughter, maxdaughter);
-
-		  if(mode == 1 && (Nodes[p].u.d.bitflags & 64) == 0)
-		    {
-		      i = Nodes[p].u.d.bitflags >> 12;
-
-		      if(DomainNodeIndex[i] != p)
-			endrun(7777);
-
-		      for(k = 0; k < 3; k++)
-			{
-			  mindaughter[k] = DomainMoment[i].minbound[k];
-			  maxdaughter[k] = DomainMoment[i].maxbound[k];
-			}
-		    }
-
-		  if(single_count == 0)
-		    {
-		      single_s[0] = Nodes[p].u.d.s[0];
-		      single_s[1] = Nodes[p].u.d.s[1];
-		      single_s[2] = Nodes[p].u.d.s[2];
-		      single_mass = Nodes[p].u.d.mass;
-		    }
-		  if(Nodes[p].u.d.mass > 0)
-		    single_count++;
-
-		  mass += (Nodes[p].u.d.mass);
-		  s[0] += (Nodes[p].u.d.mass * Nodes[p].u.d.s[0]);
-		  s[1] += (Nodes[p].u.d.mass * Nodes[p].u.d.s[1]);
-		  s[2] += (Nodes[p].u.d.mass * Nodes[p].u.d.s[2]);
-
-		  if(Extnodes[p].hmax > hmax)
-		    hmax = Extnodes[p].hmax;
-
-		  for(k = 0; k < 3; k++)
-		    {
-		      if(minbound[k] > mindaughter[k])
-			minbound[k] = mindaughter[k];
-
-		      if(maxbound[k] < maxdaughter[k])
-			maxbound[k] = maxdaughter[k];
-		    }
-
-		  p = Nodes[p].u.d.sibling;
-		}
-	    }
-	  else			/* a particle */
-	    {
-	      pa = &P[p];
-	      if(single_count == 0)
-		{
-		  single_s[0] = pa->Pos[0];
-		  single_s[1] = pa->Pos[1];
-		  single_s[2] = pa->Pos[2];
-		  single_mass = pa->Mass;
-		}
-	      single_count++;
-	      mass += (pa->Mass);
-	      s[0] += (pa->Mass * pa->Pos[0]);
-	      s[1] += (pa->Mass * pa->Pos[1]);
-	      s[2] += (pa->Mass * pa->Pos[2]);
-
-	      if(pa->Type == 0)
-		if(PPP[p].Hsml > hmax)
-		  hmax = PPP[p].Hsml;
-
-	      for(k = 0; k < 3; k++)
-		{
-		  if(minbound[k] > pa->Pos[k])
-		    minbound[k] = pa->Pos[k];
-
-		  if(maxbound[k] < pa->Pos[k])
-		    maxbound[k] = pa->Pos[k];
-		}
-
-	      p = Nextnode[p];
+		break;
 	    }
 	}
-
-      if(single_count == 1)
-	{
-	  Nodes[no].u.d.s[0] = single_s[0];
-	  Nodes[no].u.d.s[1] = single_s[1];
-	  Nodes[no].u.d.s[2] = single_s[2];
-	  Nodes[no].u.d.mass = single_mass;
-	}
-      else
-	{
-	  if(mass)
-	    {
-	      s[0] /= mass;
-	      s[1] /= mass;
-	      s[2] /= mass;
-	    }
-	  else
-	    {
-	      s[0] = Nodes[no].center[0];
-	      s[1] = Nodes[no].center[1];
-	      s[2] = Nodes[no].center[2];
-	    }
-
-	  Nodes[no].u.d.s[0] = s[0];
-	  Nodes[no].u.d.s[1] = s[1];
-	  Nodes[no].u.d.s[2] = s[2];
-	  Nodes[no].u.d.mass = mass;
-	}
-
-      for(k = 0, lenmax = Nodes[no].len; k < 3; k++)
-	{
-	  if(lenmax < 2.0 * (Nodes[no].center[k] - minbound[k]))
-	    lenmax = 2.0 * (Nodes[no].center[k] - minbound[k]);
-	  if(lenmax < 2.0 * (maxbound[k] - Nodes[no].center[k]))
-	    lenmax = 2.0 * (maxbound[k] - Nodes[no].center[k]);
-	}
-
-      Nodes[no].len = lenmax;
-
-      Extnodes[no].hmax = hmax;
-    }
-  else
-    {
-      endrun(2001);		/* should not occur */
     }
 }
 
+
+/*! This function recursively enlarges nodes of the top-level tree such
+ *  that they always contain all their daughter nodes.
+ */
+void force_update_node_len_toptree(void)
+{
+  int i, no, p;
+  FLOAT distmax;
+
+  for(i = 0; i < NTopleaves; i++)
+    if(i < DomainMyStart || i > DomainMyLast)
+      {
+	no = DomainNodeIndex[i];
+
+	if(Nodes[no].len < DomainTreeNodeLen[i])
+	  Nodes[no].len = DomainTreeNodeLen[i];
+
+	p = Nodes[no].u.d.father;
+
+	while(p >= 0)
+	  {
+	    distmax = Nodes[p].center[0] - Nodes[no].center[0];
+	    if(distmax < 0)
+	      distmax = -distmax;
+	    distmax = distmax + distmax + Nodes[no].len;
+
+	    if(0.999999 * distmax > Nodes[p].len)
+	      {
+		Nodes[p].len = distmax;
+		no = p;
+		p = Nodes[p].u.d.father;
+	      }
+	    else
+	      break;
+	  }
+      }
+}
 
 
 
 
 /*! This function updates the hmax-values in tree nodes that hold SPH
  *  particles. These values are needed to find all neighbors in the
- *  hydro-force computation.  Since the Hsml-values are potentially changed in
- *  the SPH-denity computation, force_update_hmax() should be carried out just
- *  before the hydrodynamical SPH forces are computed, i.e. after density().
+ *  hydro-force computation.  Since the Hsml-values are potentially changed
+ *  in the SPH-denity computation, force_update_hmax() should be carried
+ *  out just before the hydrodynamical SPH forces are computed, i.e. after
+ *  density().
  */
 void force_update_hmax(void)
 {
-  int i, no, recvTask;
-  int *recvcounts, *recvoffset;
-  double t0, t1;
+  int i, no;
+  MPI_Status status;
+  int level, sendTask, recvTask;
 
-  t0 = second();
+  force_update_node_hmax_local();
 
   for(i = DomainMyStart; i <= DomainMyLast; i++)
     {
       no = DomainNodeIndex[i];
 
-      force_update_hmax_of_node(no, 0);
-
       DomainHmax[i] = Extnodes[no].hmax;
     }
 
-
   /* share the hmax-data of the pseudo-particles accross CPUs */
 
-    recvcounts = (int *)mymalloc(sizeof(int) * NTask);
-    recvoffset = (int *)mymalloc(sizeof(int) * NTask);
-
-  for(recvTask = 0; recvTask < NTask; recvTask++)
+  for(level = 1; level < (1 << PTask); level++)
     {
-      recvcounts[recvTask] = (DomainEndList[recvTask] - DomainStartList[recvTask] + 1) * sizeof(FLOAT);
-      recvoffset[recvTask] = DomainStartList[recvTask] * sizeof(FLOAT);
+      sendTask = ThisTask;
+      recvTask = ThisTask ^ level;
+
+      if(recvTask < NTask)
+	MPI_Sendrecv(&DomainHmax[DomainStartList[sendTask]],
+		     (DomainEndList[sendTask] - DomainStartList[sendTask] + 1) * sizeof(FLOAT),
+		     MPI_BYTE, recvTask, TAG_HMAX,
+		     &DomainHmax[DomainStartList[recvTask]],
+		     (DomainEndList[recvTask] - DomainStartList[recvTask] + 1) * sizeof(FLOAT),
+		     MPI_BYTE, recvTask, TAG_HMAX, MPI_COMM_WORLD, &status);
     }
 
 
-  t1 = second();
-  CPU_Step[CPU_TREEHMAXUPDATE] += timediff(t0, t1);
-  All.Cadj_Cpu += timediff(t0, t1);
-  MPI_Barrier(MPI_COMM_WORLD);
-  t0 = second();
+  force_update_node_hmax_toptree();
+}
 
+/*! This routine updates the hmax-values of local tree nodes.
+ */
+void force_update_node_hmax_local(void)
+{
+  int i, p, no;
 
-  MPI_Allgatherv(&DomainHmax[DomainStartList[ThisTask]], recvcounts[ThisTask], MPI_BYTE,
-		 &DomainHmax[0], recvcounts, recvoffset, MPI_BYTE, MPI_COMM_WORLD);
+  for(i = 0; i < N_gas; i++)
+    {
 
+      no = Father[i];
 
-  t1 = second();
-  CPU_Step[CPU_TREECOMM] += timediff(t0, t1);
-  t0 = second();
+      if(SphP[i].Hsml > Extnodes[no].hmax)
+	{
 
+	  Extnodes[no].hmax = SphP[i].Hsml;
+	  p = Nodes[no].u.d.father;
 
-  myfree(recvoffset);
-  myfree(recvcounts);
+	  while(p >= 0)
+	    {
+	      if(Extnodes[no].hmax > Extnodes[p].hmax)
+		{
+		  Extnodes[p].hmax = Extnodes[no].hmax;
+		  no = p;
+		  p = Nodes[p].u.d.father;
+		}
+	      else
+		break;
+	    }
+	}
 
-  for(i = 0; i <= DomainEndList[NTask - 1]; i++)
-    if(i < DomainMyStart || i > DomainMyLast)
-      {
-	no = DomainNodeIndex[i];
-
-	Extnodes[no].hmax = DomainHmax[i];
-      }
-
-  force_update_hmax_of_node(All.MaxPart, 1);
-
-
-  t1 = second();
-  CPU_Step[CPU_TREEHMAXUPDATE] += timediff(t0, t1);
-  All.Cadj_Cpu += timediff(t0, t1);
+    }
 }
 
 
 
-/*! This routine updates the hmax-value of a node
+
+/*! This function recursively sets the hmax-values of the top-level tree.
  */
-void force_update_hmax_of_node(int no, int mode)
+void force_update_node_hmax_toptree(void)
 {
-  int j, p, count_daughters;
-  FLOAT hmax;
 
-  if(no >= All.MaxPart && no < All.MaxPart + MaxNodes)	/* internal node */
-    {
-      hmax = 0;
+  int i, no, p;
 
-      count_daughters = ((Nodes[no].u.d.bitflags >> 8) & 15);
 
-      p = Nodes[no].u.d.nextnode;
+  for(i = 0; i < NTopleaves; i++)
+    if(i < DomainMyStart || i > DomainMyLast)
+      {
+	no = DomainNodeIndex[i];
 
-      for(j = 0; j < count_daughters; j++)
-	{
-	  if(p >= All.MaxPart)	/* an internal node or pseudo particle */
-	    {
-	      if(p >= All.MaxPart + MaxNodes)	/* a pseudo particle */
-		{
-		  /* nothing to be done here because the mass of the
-		   * pseudo-particle is still zero. This will be changed
-		   * later.
-		   */
-		  endrun(1000);	/* should not occur */
-		}
-	      else
-		{
-		  if(mode == 0 || (mode == 1 && (Nodes[p].u.d.bitflags & 64)))
-		    force_update_hmax_of_node(p, mode);
+	if(Extnodes[no].hmax < DomainHmax[i])
+	  Extnodes[no].hmax = DomainHmax[i];
 
-		  if(Extnodes[p].hmax > hmax)
-		    hmax = Extnodes[p].hmax;
+	p = Nodes[no].u.d.father;
 
-		  p = Nodes[p].u.d.sibling;
-		}
-	    }
-	  else			/* a particle */
-	    {
-	      if(P[p].Type == 0)
-		if(PPP[p].Hsml > hmax)
-		  hmax = PPP[p].Hsml;
-
-	      p = Nextnode[p];
-	    }
-	}
-      Extnodes[no].hmax = hmax;
-    }
-  else
-    {
-      endrun(1001);		/* should not occur */
-    }
+	while(p >= 0)
+	  {
+	    if(Extnodes[no].hmax > Extnodes[p].hmax)
+	      {
+		Extnodes[p].hmax = Extnodes[no].hmax;
+		no = p;
+		p = Nodes[p].u.d.father;
+	      }
+	    else
+	      break;
+	  }
+      }
 }
 
 
@@ -1476,14 +1128,9 @@ int force_treeevaluate(int target, int mode, double *ewaldcountsum)
   struct NODE *nop = 0;
   int no, ninteractions, ptype;
   double r2, dx, dy, dz, mass, r, fac, u, h, h_inv, h3_inv;
-  double pos_x, pos_y, pos_z, aold;
-  DOUBLE acc_x, acc_y, acc_z;
-
-#ifdef EVALPOTENTIAL
-  double wp;
-  DOUBLE pot;
-
-  pot = 0.0;
+  double acc_x, acc_y, acc_z, pos_x, pos_y, pos_z, aold;
+#if defined(UNEQUALSOFTENINGS) && !defined(ADAPTIVE_GRAVSOFT_FORGAS)
+  int maxsofttype;
 #endif
 #ifdef ADAPTIVE_GRAVSOFT_FORGAS
   double soft = 0;
@@ -1509,15 +1156,7 @@ int force_treeevaluate(int target, int mode, double *ewaldcountsum)
       aold = All.ErrTolForceAcc * P[target].OldAcc;
 #ifdef ADAPTIVE_GRAVSOFT_FORGAS
       if(ptype == 0)
-	{
-#ifdef ADAPTIVE_GRAVSOFT_FORGAS_HSML
-	  soft = dmin(All.SofteningTable[P[target].Type],ADAPTIVE_GRAVSOFT_FORGAS_HSML * PPP[target].Hsml);
-#else
-	  soft = All.ForceSoftening[0] * pow(P[target].Mass / All.ReferenceGasMass, 1.0 / 3);
-#endif
-	}
-      else
-	soft = All.ForceSoftening[ptype];
+	soft = SphP[target].Hsml;
 #endif
     }
   else
@@ -1526,13 +1165,14 @@ int force_treeevaluate(int target, int mode, double *ewaldcountsum)
       pos_y = GravDataGet[target].u.Pos[1];
       pos_z = GravDataGet[target].u.Pos[2];
 #ifdef UNEQUALSOFTENINGS
-      ptype = GravDataGet[target].v.Type;
+      ptype = GravDataGet[target].Type;
 #else
       ptype = P[0].Type;
 #endif
       aold = All.ErrTolForceAcc * GravDataGet[target].w.OldAcc;
 #ifdef ADAPTIVE_GRAVSOFT_FORGAS
-      soft = GravDataGet[target].Soft;
+      if(ptype == 0)
+	soft = GravDataGet[target].Soft;
 #endif
     }
 
@@ -1587,17 +1227,15 @@ int force_treeevaluate(int target, int mode, double *ewaldcountsum)
 	{
 #ifdef UNEQUALSOFTENINGS
 #ifdef ADAPTIVE_GRAVSOFT_FORGAS
-	  h = soft;
+	  if(ptype == 0)
+	    h = soft;
+	  else
+	    h = All.ForceSoftening[ptype];
 
 	  if(P[no].Type == 0)
 	    {
-#ifdef ADAPTIVE_GRAVSOFT_FORGAS_HSML
-	      if(h < dmin(All.SofteningTable[P[no].Type],ADAPTIVE_GRAVSOFT_FORGAS_HSML * PPP[no].Hsml);
-		h = dmin(All.SofteningTable[P[no].Type],ADAPTIVE_GRAVSOFT_FORGAS_HSML * PPP[no].Hsml);
-#else
-	      if(h < All.ForceSoftening[0] * pow(P[no].Mass / All.ReferenceGasMass, 1.0 / 3))
-		h = All.ForceSoftening[0] * pow(P[no].Mass / All.ReferenceGasMass, 1.0 / 3);
-#endif
+	      if(h < SphP[no].Hsml)
+		h = SphP[no].Hsml;
 	    }
 	  else
 	    {
@@ -1660,24 +1298,37 @@ int force_treeevaluate(int target, int mode, double *ewaldcountsum)
 		}
 	    }
 
-
 #ifdef UNEQUALSOFTENINGS
 #ifndef ADAPTIVE_GRAVSOFT_FORGAS
 	  h = All.ForceSoftening[ptype];
-	  if(h < All.ForceSoftening[(nop->u.d.bitflags >> 2) & 7])
-	    {
-	      h = All.ForceSoftening[(nop->u.d.bitflags >> 2) & 7];
-	      if(r2 < h * h)
-		{
-		  if(((nop->u.d.bitflags >> 5) & 1))	/* bit-5 signals that there are particles of different softening in the node */
-		    {
-		      no = nop->u.d.nextnode;
-		      continue;
-		    }
-		}
-	    }
+          maxsofttype = (nop->u.d.bitflags >> 2) & 7;
+          if(maxsofttype == 7) /* may only occur for zero mass top-level nodes */
+            {
+              if(mass > 0)
+                endrun(986);
+              no = nop->u.d.nextnode;
+              continue;
+            }
+          else
+            {
+              if(h < All.ForceSoftening[maxsofttype])
+                {
+                  h = All.ForceSoftening[maxsofttype];
+                  if(r2 < h * h)
+                    {
+                      if(((nop->u.d.bitflags >> 5) & 1))	/* bit-5 signals that there are particles of different softening in the node */
+                        {
+                          no = nop->u.d.nextnode;
+                          continue;
+                        }
+                    }
+                }
+            }
 #else
-	  h = soft;
+	  if(ptype == 0)
+	    h = soft;
+	  else
+	    h = All.ForceSoftening[ptype];
 
 	  if(h < nop->maxsoft)
 	    {
@@ -1703,12 +1354,7 @@ int force_treeevaluate(int target, int mode, double *ewaldcountsum)
       r = sqrt(r2);
 
       if(r >= h)
-	{
-	  fac = mass / (r2 * r);
-#ifdef EVALPOTENTIAL
-	  pot += FLT(-mass / r);
-#endif
-	}
+	fac = mass / (r2 * r);
       else
 	{
 #ifdef UNEQUALSOFTENINGS
@@ -1722,27 +1368,11 @@ int force_treeevaluate(int target, int mode, double *ewaldcountsum)
 	    fac =
 	      mass * h3_inv * (21.333333333333 - 48.0 * u +
 			       38.4 * u * u - 10.666666666667 * u * u * u - 0.066666666667 / (u * u * u));
-
-#ifdef EVALPOTENTIAL
-	  if(u < 0.5)
-	    wp = -2.8 + u * u * (5.333333333333 + u * u * (6.4 * u - 9.6));
-	  else
-	    wp =
-	      -3.2 + 0.066666666667 / u + u * u * (10.666666666667 +
-						   u * (-16.0 + u * (9.6 - 2.133333333333 * u)));
-	  pot += FLT(mass * h_inv * wp);
-#endif
 	}
 
-#ifdef EVALPOTENTIAL
-#ifdef PERIODIC
-      pot += FLT(mass * ewald_pot_corr(dx, dy, dz));
-#endif
-#endif
-
-      acc_x += FLT(dx * fac);
-      acc_y += FLT(dy * fac);
-      acc_z += FLT(dz * fac);
+      acc_x += dx * fac;
+      acc_y += dy * fac;
+      acc_z += dz * fac;
 
       ninteractions++;
     }
@@ -1751,13 +1381,10 @@ int force_treeevaluate(int target, int mode, double *ewaldcountsum)
   /* store result at the proper place */
   if(mode == 0)
     {
-      P[target].g.dGravAccel[0] = acc_x;
-      P[target].g.dGravAccel[1] = acc_y;
-      P[target].g.dGravAccel[2] = acc_z;
+      P[target].GravAccel[0] = acc_x;
+      P[target].GravAccel[1] = acc_y;
+      P[target].GravAccel[2] = acc_z;
       P[target].GravCost = ninteractions;
-#ifdef EVALPOTENTIAL
-      P[target].p.dPotential = pot;
-#endif
     }
   else
     {
@@ -1765,9 +1392,6 @@ int force_treeevaluate(int target, int mode, double *ewaldcountsum)
       GravDataResult[target].u.Acc[1] = acc_y;
       GravDataResult[target].u.Acc[2] = acc_z;
       GravDataResult[target].w.Ninteractions = ninteractions;
-#ifdef EVALPOTENTIAL
-      GravDataResult[target].v.Potential = pot;
-#endif
     }
 
 #ifdef PERIODIC
@@ -1783,33 +1407,30 @@ int force_treeevaluate(int target, int mode, double *ewaldcountsum)
 
 
 #ifdef PMGRID
-/*! In the TreePM algorithm, the tree is walked only locally around the target
- *  coordinate.  Tree nodes that fall outside a box of half side-length Rcut=
- *  RCUT*ASMTH*MeshSize can be discarded. The short-range potential is
- *  modified by a complementary error function compared to the Newtonian
- *  form. The resulting short-range suppression compared to the Newtonian
- *  force is tabulated, because looking up from this table is faster than
- *  recomputing the corresponding factor, despite the memory-access panelty
- *  (which is bad for the cache performance) incurred by the table.
+/*! In the TreePM algorithm, the tree is walked only locally around the
+ *  target coordinate.  Tree nodes that fall outside a box of half
+ *  side-length Rcut= RCUT*ASMTH*MeshSize can be discarded. The short-range
+ *  potential is modified by a complementary error function, multiplied
+ *  with the Newtonian form. The resulting short-range suppression compared
+ *  to the Newtonian force is tabulated, because looking up from this table
+ *  is faster than recomputing the corresponding factor, despite the
+ *  memory-access panelty (which reduces cache performance) incurred by the
+ *  table.
  */
 int force_treeevaluate_shortrange(int target, int mode)
 {
   struct NODE *nop = 0;
   int no, ptype, ninteractions, tabindex;
   double r2, dx, dy, dz, mass, r, fac, u, h, h_inv, h3_inv;
-  double pos_x, pos_y, pos_z, aold;
+  double acc_x, acc_y, acc_z, pos_x, pos_y, pos_z, aold;
   double eff_dist;
   double rcut, asmth, asmthfac, rcut2, dist;
-  DOUBLE acc_x, acc_y, acc_z;
-
+#if defined(UNEQUALSOFTENINGS) && !defined(ADAPTIVE_GRAVSOFT_FORGAS)
+  int maxsofttype;
+#endif
 #ifdef ADAPTIVE_GRAVSOFT_FORGAS
   double soft = 0;
 #endif
-#ifdef EVALPOTENTIAL
-  double wp, facpot;
-  DOUBLE pot = 0;
-#endif
-
 #ifdef PERIODIC
   double boxsize, boxhalf;
 
@@ -1832,15 +1453,7 @@ int force_treeevaluate_shortrange(int target, int mode)
       aold = All.ErrTolForceAcc * P[target].OldAcc;
 #ifdef ADAPTIVE_GRAVSOFT_FORGAS
       if(ptype == 0)
-	{
-#ifdef ADAPTIVE_GRAVSOFT_FORGAS_HSML
-	  soft = dmin(All.SofteningTable[P[target].Type],ADAPTIVE_GRAVSOFT_FORGAS_HSML * PPP[target].Hsml);
-#else
-	  soft = All.ForceSoftening[0] * pow(P[target].Mass / All.ReferenceGasMass, 1.0 / 3);
-#endif
-	}
-      else
-	soft = All.ForceSoftening[ptype];
+	soft = SphP[target].Hsml;
 #endif
     }
   else
@@ -1849,13 +1462,14 @@ int force_treeevaluate_shortrange(int target, int mode)
       pos_y = GravDataGet[target].u.Pos[1];
       pos_z = GravDataGet[target].u.Pos[2];
 #ifdef UNEQUALSOFTENINGS
-      ptype = GravDataGet[target].v.Type;
+      ptype = GravDataGet[target].Type;
 #else
       ptype = P[0].Type;
 #endif
       aold = All.ErrTolForceAcc * GravDataGet[target].w.OldAcc;
 #ifdef ADAPTIVE_GRAVSOFT_FORGAS
-      soft = GravDataGet[target].Soft;
+      if(ptype == 0)
+	soft = GravDataGet[target].Soft;
 #endif
     }
 
@@ -1897,17 +1511,15 @@ int force_treeevaluate_shortrange(int target, int mode)
 	  mass = P[no].Mass;
 #ifdef UNEQUALSOFTENINGS
 #ifdef ADAPTIVE_GRAVSOFT_FORGAS
-	  h = soft;
+	  if(ptype == 0)
+	    h = soft;
+	  else
+	    h = All.ForceSoftening[ptype];
 
 	  if(P[no].Type == 0)
 	    {
-#ifdef ADAPTIVE_GRAVSOFT_FORGAS_HSML
-	      if(h < dmin(All.SofteningTable[P[no].Type],ADAPTIVE_GRAVSOFT_FORGAS_HSML * PPP[no].Hsml);
-		h = dmin(All.SofteningTable[P[no].Type],ADAPTIVE_GRAVSOFT_FORGAS_HSML * PPP[no].Hsml);
-#else
-	      if(h < All.ForceSoftening[0] * pow(P[no].Mass / All.ReferenceGasMass, 1.0 / 3))
-		h = All.ForceSoftening[0] * pow(P[no].Mass / All.ReferenceGasMass, 1.0 / 3);
-#endif
+	      if(h < SphP[no].Hsml)
+		h = SphP[no].Hsml;
 	    }
 	  else
 	    {
@@ -1963,40 +1575,37 @@ int force_treeevaluate_shortrange(int target, int mode)
 
 	  if(r2 > rcut2)
 	    {
-	      if(nop->u.d.bitflags & 128)
+	      /* check whether we can stop walking along this branch */
+	      eff_dist = rcut + 0.5 * nop->len;
+#ifdef PERIODIC
+	      dist = NEAREST(nop->center[0] - pos_x);
+#else
+	      dist = nop->center[0] - pos_x;
+#endif
+	      if(dist < -eff_dist || dist > eff_dist)
 		{
-		  /* check whether we can stop walking along this branch */
-		  eff_dist = rcut + 0.5 * nop->len;
+		  no = nop->u.d.sibling;
+		  continue;
+		}
 #ifdef PERIODIC
-		  dist = NEAREST(nop->center[0] - pos_x);
+	      dist = NEAREST(nop->center[1] - pos_y);
 #else
-		  dist = nop->center[0] - pos_x;
+	      dist = nop->center[1] - pos_y;
 #endif
-		  if(dist < -eff_dist || dist > eff_dist)
-		    {
-		      no = nop->u.d.sibling;
-		      continue;
-		    }
+	      if(dist < -eff_dist || dist > eff_dist)
+		{
+		  no = nop->u.d.sibling;
+		  continue;
+		}
 #ifdef PERIODIC
-		  dist = NEAREST(nop->center[1] - pos_y);
+	      dist = NEAREST(nop->center[2] - pos_z);
 #else
-		  dist = nop->center[1] - pos_y;
+	      dist = nop->center[2] - pos_z;
 #endif
-		  if(dist < -eff_dist || dist > eff_dist)
-		    {
-		      no = nop->u.d.sibling;
-		      continue;
-		    }
-#ifdef PERIODIC
-		  dist = NEAREST(nop->center[2] - pos_z);
-#else
-		  dist = nop->center[2] - pos_z;
-#endif
-		  if(dist < -eff_dist || dist > eff_dist)
-		    {
-		      no = nop->u.d.sibling;
-		      continue;
-		    }
+	      if(dist < -eff_dist || dist > eff_dist)
+		{
+		  no = nop->u.d.sibling;
+		  continue;
 		}
 	    }
 
@@ -2037,21 +1646,35 @@ int force_treeevaluate_shortrange(int target, int mode)
 #ifdef UNEQUALSOFTENINGS
 #ifndef ADAPTIVE_GRAVSOFT_FORGAS
 	  h = All.ForceSoftening[ptype];
-	  if(h < All.ForceSoftening[(nop->u.d.bitflags >> 2) & 7])
-	    {
-	      h = All.ForceSoftening[(nop->u.d.bitflags >> 2) & 7];
-	      if(r2 < h * h)
-		{
-		  if(((nop->u.d.bitflags >> 5) & 1))	/* bit-5 signals that there are particles of different softening in the node */
-		    {
-		      no = nop->u.d.nextnode;
-
-		      continue;
-		    }
-		}
-	    }
+          maxsofttype = (nop->u.d.bitflags >> 2) & 7;
+          if(maxsofttype == 7) /* may only occur for zero mass top-level nodes */
+            {
+              if(mass > 0)
+                endrun(987);
+              no = nop->u.d.nextnode;
+              continue;
+            }
+          else
+            {
+              if(h < All.ForceSoftening[maxsofttype])
+                {
+                  h = All.ForceSoftening[maxsofttype];
+                  if(r2 < h * h)
+                    {
+                      if(((nop->u.d.bitflags >> 5) & 1))	/* bit-5 signals that there are particles of different softening in the node */
+                        {
+                          no = nop->u.d.nextnode;
+                          
+                          continue;
+                        }
+                    }
+                }
+            }
 #else
-	  h = soft;
+	  if(ptype == 0)
+	    h = soft;
+	  else
+	    h = All.ForceSoftening[ptype];
 
 	  if(h < nop->maxsoft)
 	    {
@@ -2076,12 +1699,7 @@ int force_treeevaluate_shortrange(int target, int mode)
       r = sqrt(r2);
 
       if(r >= h)
-	{
-	  fac = mass / (r2 * r);
-#ifdef EVALPOTENTIAL
-	  facpot = -mass / r;
-#endif
-	}
+	fac = mass / (r2 * r);
       else
 	{
 #ifdef UNEQUALSOFTENINGS
@@ -2095,16 +1713,6 @@ int force_treeevaluate_shortrange(int target, int mode)
 	    fac =
 	      mass * h3_inv * (21.333333333333 - 48.0 * u +
 			       38.4 * u * u - 10.666666666667 * u * u * u - 0.066666666667 / (u * u * u));
-#ifdef EVALPOTENTIAL
-	  if(u < 0.5)
-	    wp = -2.8 + u * u * (5.333333333333 + u * u * (6.4 * u - 9.6));
-	  else
-	    wp =
-	      -3.2 + 0.066666666667 / u + u * u * (10.666666666667 +
-						   u * (-16.0 + u * (9.6 - 2.133333333333 * u)));
-
-	  facpot = mass * h_inv * wp;
-#endif
 	}
 
       tabindex = (int) (asmthfac * r);
@@ -2113,13 +1721,10 @@ int force_treeevaluate_shortrange(int target, int mode)
 	{
 	  fac *= shortrange_table[tabindex];
 
-	  acc_x += FLT(dx * fac);
-	  acc_y += FLT(dy * fac);
-	  acc_z += FLT(dz * fac);
+	  acc_x += dx * fac;
+	  acc_y += dy * fac;
+	  acc_z += dz * fac;
 
-#ifdef EVALPOTENTIAL
-	  pot += FLT(facpot * shortrange_table_potential[tabindex]);
-#endif
 	  ninteractions++;
 	}
     }
@@ -2128,13 +1733,10 @@ int force_treeevaluate_shortrange(int target, int mode)
   /* store result at the proper place */
   if(mode == 0)
     {
-      P[target].g.dGravAccel[0] = acc_x;
-      P[target].g.dGravAccel[1] = acc_y;
-      P[target].g.dGravAccel[2] = acc_z;
+      P[target].GravAccel[0] = acc_x;
+      P[target].GravAccel[1] = acc_y;
+      P[target].GravAccel[2] = acc_z;
       P[target].GravCost = ninteractions;
-#ifdef EVALPOTENTIAL
-      P[target].p.dPotential = pot;
-#endif
     }
   else
     {
@@ -2142,9 +1744,6 @@ int force_treeevaluate_shortrange(int target, int mode)
       GravDataResult[target].u.Acc[1] = acc_y;
       GravDataResult[target].u.Acc[2] = acc_z;
       GravDataResult[target].w.Ninteractions = ninteractions;
-#ifdef EVALPOTENTIAL
-      GravDataResult[target].v.Potential = pot;
-#endif
     }
 
   return ninteractions;
@@ -2157,20 +1756,21 @@ int force_treeevaluate_shortrange(int target, int mode)
 #ifdef PERIODIC
 /*! This function computes the Ewald correction, and is needed if periodic
  *  boundary conditions together with a pure tree algorithm are used. Note
- *  that the ordinary tree walk does not carry out this correction directly as
- *  it was done in Gadget-1.1. Instead, the tree is walked a second time. This
- *  is actually faster because the "Ewald-Treewalk" can use a different
- *  opening criterion than the normal tree walk. In particular, the Ewald
- *  correction is negligible for particles that are very close, but it is
- *  large for particles that are far away (this is quite different for the
- *  normal direct force). So we can here use a different opening
- *  criterion. Sufficient accuracy is usually obtained if the node length has
- *  dropped to a certain fraction ~< 0.25 of the BoxLength. However, we may
- *  only short-cut the interaction list of the normal full Ewald tree walk if
- *  we are sure that the whole node and all daughter nodes "lie on the same
- *  side" of the periodic boundary, i.e. that the real tree walk would not
- *  find a daughter node or particle that was mapped to a different nearest
- *  neighbour position when the tree walk would be further refined.
+ *  that the ordinary tree walk does not carry out this correction directly
+ *  as it was done in Gadget-1.1. Instead, the tree is walked a second
+ *  time. This is actually faster because the "Ewald-Treewalk" can use a
+ *  different opening criterion than the normal tree walk. In particular,
+ *  the Ewald correction is negligible for particles that are very close,
+ *  but it is large for particles that are far away (this is quite
+ *  different for the normal direct force). So we can here use a different
+ *  opening criterion. Sufficient accuracy is usually obtained if the node
+ *  length has dropped to a certain fraction ~< 0.25 of the
+ *  BoxLength. However, we may only short-cut the interaction list of the
+ *  normal full Ewald tree walk if we are sure that the whole node and all
+ *  daughter nodes "lie on the same side" of the periodic boundary,
+ *  i.e. that the real tree walk would not find a daughter node or particle
+ *  that was mapped to a different nearest neighbour position when the tree
+ *  walk would be further refined.
  */
 int force_treeevaluate_ewald_correction(int target, int mode, double pos_x, double pos_y, double pos_z,
 					double aold)
@@ -2182,7 +1782,7 @@ int force_treeevaluate_ewald_correction(int target, int mode, double pos_x, doub
   int i, j, k, openflag;
   double u, v, w;
   double f1, f2, f3, f4, f5, f6, f7, f8;
-  DOUBLE acc_x, acc_y, acc_z;
+  double acc_x, acc_y, acc_z;
   double boxsize, boxhalf;
 
   boxsize = All.BoxSize;
@@ -2308,7 +1908,7 @@ int force_treeevaluate_ewald_correction(int target, int mode, double pos_x, doub
 		}
 
 	      /* if the cell is too large, we need to refine
-	       * it further
+	       * it further 
 	       */
 	      if(nop->len > 0.20 * boxsize)
 		{
@@ -2380,29 +1980,29 @@ int force_treeevaluate_ewald_correction(int target, int mode, double pos_x, doub
       f7 = (u) * (v) * (1 - w);
       f8 = (u) * (v) * (w);
 
-      acc_x += FLT(mass * signx * (fcorrx[i][j][k] * f1 +
-				   fcorrx[i][j][k + 1] * f2 +
-				   fcorrx[i][j + 1][k] * f3 +
-				   fcorrx[i][j + 1][k + 1] * f4 +
-				   fcorrx[i + 1][j][k] * f5 +
-				   fcorrx[i + 1][j][k + 1] * f6 +
-				   fcorrx[i + 1][j + 1][k] * f7 + fcorrx[i + 1][j + 1][k + 1] * f8));
+      acc_x += mass * signx * (fcorrx[i][j][k] * f1 +
+			       fcorrx[i][j][k + 1] * f2 +
+			       fcorrx[i][j + 1][k] * f3 +
+			       fcorrx[i][j + 1][k + 1] * f4 +
+			       fcorrx[i + 1][j][k] * f5 +
+			       fcorrx[i + 1][j][k + 1] * f6 +
+			       fcorrx[i + 1][j + 1][k] * f7 + fcorrx[i + 1][j + 1][k + 1] * f8);
 
-      acc_y += FLT(mass * signy * (fcorry[i][j][k] * f1 +
-				   fcorry[i][j][k + 1] * f2 +
-				   fcorry[i][j + 1][k] * f3 +
-				   fcorry[i][j + 1][k + 1] * f4 +
-				   fcorry[i + 1][j][k] * f5 +
-				   fcorry[i + 1][j][k + 1] * f6 +
-				   fcorry[i + 1][j + 1][k] * f7 + fcorry[i + 1][j + 1][k + 1] * f8));
+      acc_y += mass * signy * (fcorry[i][j][k] * f1 +
+			       fcorry[i][j][k + 1] * f2 +
+			       fcorry[i][j + 1][k] * f3 +
+			       fcorry[i][j + 1][k + 1] * f4 +
+			       fcorry[i + 1][j][k] * f5 +
+			       fcorry[i + 1][j][k + 1] * f6 +
+			       fcorry[i + 1][j + 1][k] * f7 + fcorry[i + 1][j + 1][k + 1] * f8);
 
-      acc_z += FLT(mass * signz * (fcorrz[i][j][k] * f1 +
-				   fcorrz[i][j][k + 1] * f2 +
-				   fcorrz[i][j + 1][k] * f3 +
-				   fcorrz[i][j + 1][k + 1] * f4 +
-				   fcorrz[i + 1][j][k] * f5 +
-				   fcorrz[i + 1][j][k + 1] * f6 +
-				   fcorrz[i + 1][j + 1][k] * f7 + fcorrz[i + 1][j + 1][k + 1] * f8));
+      acc_z += mass * signz * (fcorrz[i][j][k] * f1 +
+			       fcorrz[i][j][k + 1] * f2 +
+			       fcorrz[i][j + 1][k] * f3 +
+			       fcorrz[i][j + 1][k + 1] * f4 +
+			       fcorrz[i + 1][j][k] * f5 +
+			       fcorrz[i + 1][j][k + 1] * f6 +
+			       fcorrz[i + 1][j + 1][k] * f7 + fcorrz[i + 1][j + 1][k + 1] * f8);
       cost++;
     }
 
@@ -2411,9 +2011,9 @@ int force_treeevaluate_ewald_correction(int target, int mode, double pos_x, doub
 
   if(mode == 0)
     {
-      P[target].g.dGravAccel[0] += acc_x;
-      P[target].g.dGravAccel[1] += acc_y;
-      P[target].g.dGravAccel[2] += acc_z;
+      P[target].GravAccel[0] += acc_x;
+      P[target].GravAccel[1] += acc_y;
+      P[target].GravAccel[2] += acc_z;
       P[target].GravCost += cost;
     }
   else
@@ -2433,7 +2033,6 @@ int force_treeevaluate_ewald_correction(int target, int mode, double pos_x, doub
 
 
 
-#if defined(COMPUTE_POTENTIAL_ENERGY) || defined(OUTPUTPOTENTIAL)
 
 /*! This routine computes the gravitational potential by walking the
  *  tree. The same opening criteria is used as for the gravitational force
@@ -2442,11 +2041,12 @@ int force_treeevaluate_ewald_correction(int target, int mode, double pos_x, doub
 void force_treeevaluate_potential(int target, int mode)
 {
   struct NODE *nop = 0;
-  DOUBLE pot;
   int no, ptype;
   double r2, dx, dy, dz, mass, r, u, h, h_inv, wp;
-  double pos_x, pos_y, pos_z, aold;
-
+  double pot, pos_x, pos_y, pos_z, aold;
+#if defined(UNEQUALSOFTENINGS) && !defined(ADAPTIVE_GRAVSOFT_FORGAS)
+  int maxsofttype;
+#endif
 #ifdef ADAPTIVE_GRAVSOFT_FORGAS
   double soft = 0;
 #endif
@@ -2468,15 +2068,7 @@ void force_treeevaluate_potential(int target, int mode)
       aold = All.ErrTolForceAcc * P[target].OldAcc;
 #ifdef ADAPTIVE_GRAVSOFT_FORGAS
       if(ptype == 0)
-	{
-#ifdef ADAPTIVE_GRAVSOFT_FORGAS_HSML
-	  soft = dmin(All.SofteningTable[P[target].Type],ADAPTIVE_GRAVSOFT_FORGAS_HSML * PPP[target].Hsml);
-#else
-	  soft = All.ForceSoftening[0] * pow(P[target].Mass / All.ReferenceGasMass, 1.0 / 3);
-#endif
-	}
-      else
-	soft = All.ForceSoftening[ptype];
+	soft = SphP[target].Hsml;
 #endif
     }
   else
@@ -2485,13 +2077,14 @@ void force_treeevaluate_potential(int target, int mode)
       pos_y = GravDataGet[target].u.Pos[1];
       pos_z = GravDataGet[target].u.Pos[2];
 #ifdef UNEQUALSOFTENINGS
-      ptype = GravDataGet[target].v.Type;
+      ptype = GravDataGet[target].Type;
 #else
       ptype = P[0].Type;
 #endif
       aold = All.ErrTolForceAcc * GravDataGet[target].w.OldAcc;
 #ifdef ADAPTIVE_GRAVSOFT_FORGAS
-      soft = GravDataGet[target].Soft;
+      if(ptype == 0)
+	soft = GravDataGet[target].Soft;
 #endif
     }
 
@@ -2544,18 +2137,15 @@ void force_treeevaluate_potential(int target, int mode)
 	{
 #ifdef UNEQUALSOFTENINGS
 #ifdef ADAPTIVE_GRAVSOFT_FORGAS
-	  h = soft;
+	  if(ptype == 0)
+	    h = soft;
+	  else
+	    h = All.ForceSoftening[ptype];
 
 	  if(P[no].Type == 0)
 	    {
-#ifdef ADAPTIVE_GRAVSOFT_FORGAS_HSML
-	      if(h < dmin(All.SofteningTable[P[no].Type],ADAPTIVE_GRAVSOFT_FORGAS_HSML * PPP[no].Hsml);
-		h = dmin(All.SofteningTable[P[no].Type],ADAPTIVE_GRAVSOFT_FORGAS_HSML * PPP[no].Hsml);
-#else
-	      if(h < All.ForceSoftening[0] * pow(P[no].Mass / All.ReferenceGasMass, 1.0 / 3))
-		h = All.ForceSoftening[0] * pow(P[no].Mass / All.ReferenceGasMass, 1.0 / 3);
-#endif
-
+	      if(h < SphP[no].Hsml)
+		h = SphP[no].Hsml;
 	    }
 	  else
 	    {
@@ -2577,7 +2167,7 @@ void force_treeevaluate_potential(int target, int mode)
 	      if((nop->u.d.bitflags & 3) == 1)	/* if it's a top-level node
 						 * which does not contain
 						 * local particles we can make
-						 * a short-cut
+						 * a short-cut 
 						 */
 		{
 		  no = nop->u.d.sibling;
@@ -2618,20 +2208,34 @@ void force_treeevaluate_potential(int target, int mode)
 #ifdef UNEQUALSOFTENINGS
 #ifndef ADAPTIVE_GRAVSOFT_FORGAS
 	  h = All.ForceSoftening[ptype];
-	  if(h < All.ForceSoftening[(nop->u.d.bitflags >> 2) & 7])
-	    {
-	      h = All.ForceSoftening[(nop->u.d.bitflags >> 2) & 7];
-	      if(r2 < h * h)
-		{
-		  if(((nop->u.d.bitflags >> 5) & 1))	/* bit-5 signals that there are particles of different softening in the node */
-		    {
-		      no = nop->u.d.nextnode;
-		      continue;
-		    }
-		}
-	    }
+          maxsofttype = (nop->u.d.bitflags >> 2) & 7;
+          if(maxsofttype == 7) /* may only occur for zero mass top-level nodes */
+            {
+              if(mass > 0)
+                endrun(988);
+              no = nop->u.d.nextnode;
+              continue;
+            }
+          else
+            {
+              if(h < All.ForceSoftening[maxsofttype])
+                {
+                  h = All.ForceSoftening[maxsofttype];
+                  if(r2 < h * h)
+                    {
+                      if(((nop->u.d.bitflags >> 5) & 1))	/* bit-5 signals that there are particles of different softening in the node */
+                        {
+                          no = nop->u.d.nextnode;
+                          continue;
+                        }
+                    }
+                }
+            }
 #else
-	  h = soft;
+	  if(ptype == 0)
+	    h = soft;
+	  else
+	    h = All.ForceSoftening[ptype];
 
 	  if(h < nop->maxsoft)
 	    {
@@ -2657,7 +2261,7 @@ void force_treeevaluate_potential(int target, int mode)
       r = sqrt(r2);
 
       if(r >= h)
-	pot += FLT(-mass / r);
+	pot -= mass / r;
       else
 	{
 #ifdef UNEQUALSOFTENINGS
@@ -2672,43 +2276,43 @@ void force_treeevaluate_potential(int target, int mode)
 	      -3.2 + 0.066666666667 / u + u * u * (10.666666666667 +
 						   u * (-16.0 + u * (9.6 - 2.133333333333 * u)));
 
-	  pot += FLT(mass * h_inv * wp);
+	  pot += mass * h_inv * wp;
 	}
 #ifdef PERIODIC
-      pot += FLT(mass * ewald_pot_corr(dx, dy, dz));
+      pot += mass * ewald_pot_corr(dx, dy, dz);
 #endif
     }
 
   /* store result at the proper place */
 
   if(mode == 0)
-    P[target].p.dPotential = pot;
+    P[target].Potential = pot;
   else
-    GravDataResult[target].v.Potential = pot;
+    GravDataResult[target].u.Potential = pot;
 }
 
 
 
 
 #ifdef PMGRID
-/*! This function computes the short-range potential when the TreePM algorithm
- *  is used. This potential is the Newtonian potential, modified by a
- *  complementary error function.
+/*! This function computes the short-range potential when the TreePM
+ *  algorithm is used. This potential is the Newtonian potential, modified
+ *  by a complementary error function.
  */
 void force_treeevaluate_potential_shortrange(int target, int mode)
 {
   struct NODE *nop = 0;
-  DOUBLE pot;
   int no, ptype, tabindex;
   double r2, dx, dy, dz, mass, r, u, h, h_inv, wp;
-  double pos_x, pos_y, pos_z, aold;
+  double pot, pos_x, pos_y, pos_z, aold;
   double eff_dist, fac, rcut, asmth, asmthfac;
   double dxx, dyy, dzz;
-
+#if defined(UNEQUALSOFTENINGS) && !defined(ADAPTIVE_GRAVSOFT_FORGAS)
+  int maxsofttype;
+#endif
 #ifdef ADAPTIVE_GRAVSOFT_FORGAS
   double soft = 0;
 #endif
-
 
 #ifdef PERIODIC
   double boxsize, boxhalf;
@@ -2728,15 +2332,7 @@ void force_treeevaluate_potential_shortrange(int target, int mode)
       aold = All.ErrTolForceAcc * P[target].OldAcc;
 #ifdef ADAPTIVE_GRAVSOFT_FORGAS
       if(ptype == 0)
-	{
-#ifdef ADAPTIVE_GRAVSOFT_FORGAS_HSML
-	  soft = dmin(All.SofteningTable[P[target].Type],ADAPTIVE_GRAVSOFT_FORGAS_HSML * PPP[target].Hsml);
-#else
-	  soft = All.ForceSoftening[0] * pow(P[target].Mass / All.ReferenceGasMass, 1.0 / 3);
-	}
-      else
-	soft = All.ForceSoftening[ptype];
-#endif
+	soft = SphP[target].Hsml;
 #endif
     }
   else
@@ -2745,13 +2341,14 @@ void force_treeevaluate_potential_shortrange(int target, int mode)
       pos_y = GravDataGet[target].u.Pos[1];
       pos_z = GravDataGet[target].u.Pos[2];
 #ifdef UNEQUALSOFTENINGS
-      ptype = GravDataGet[target].v.Type;
+      ptype = GravDataGet[target].Type;
 #else
       ptype = P[0].Type;
 #endif
       aold = All.ErrTolForceAcc * GravDataGet[target].w.OldAcc;
 #ifdef ADAPTIVE_GRAVSOFT_FORGAS
-      soft = GravDataGet[target].Soft;
+      if(ptype == 0)
+	soft = GravDataGet[target].Soft;
 #endif
     }
 
@@ -2816,17 +2413,15 @@ void force_treeevaluate_potential_shortrange(int target, int mode)
 	{
 #ifdef UNEQUALSOFTENINGS
 #ifdef ADAPTIVE_GRAVSOFT_FORGAS
-	  h = soft;
+	  if(ptype == 0)
+	    h = soft;
+	  else
+	    h = All.ForceSoftening[ptype];
 
 	  if(P[no].Type == 0)
 	    {
-#ifdef ADAPTIVE_GRAVSOFT_FORGAS_HSML
-	      if(h < dmin(All.SofteningTable[P[no].Type],ADAPTIVE_GRAVSOFT_FORGAS_HSML * PPP[no].Hsml);
-		h = dmin(All.SofteningTable[P[no].Type],ADAPTIVE_GRAVSOFT_FORGAS_HSML * PPP[no].Hsml);
-#else
-	      if(h < All.ForceSoftening[0] * pow(P[no].Mass / All.ReferenceGasMass, 1.0 / 3))
-		h = All.ForceSoftening[0] * pow(P[no].Mass / All.ReferenceGasMass, 1.0 / 3);
-#endif
+	      if(h < SphP[no].Hsml)
+		h = SphP[no].Hsml;
 	    }
 	  else
 	    {
@@ -2925,23 +2520,37 @@ void force_treeevaluate_potential_shortrange(int target, int mode)
 #ifdef UNEQUALSOFTENINGS
 #ifndef ADAPTIVE_GRAVSOFT_FORGAS
 	  h = All.ForceSoftening[ptype];
-	  if(h < All.ForceSoftening[(nop->u.d.bitflags >> 2) & 7])
-	    {
-	      h = All.ForceSoftening[(nop->u.d.bitflags >> 2) & 7];
-	      if(r2 < h * h)
-		{
-		  /* bit-5 signals that there are particles of
-		   * different softening in the node
-		   */
-		  if(((nop->u.d.bitflags >> 5) & 1))
-		    {
-		      no = nop->u.d.nextnode;
-		      continue;
-		    }
-		}
+          maxsofttype = (nop->u.d.bitflags >> 2) & 7;
+          if(maxsofttype == 7) /* may only occur for zero mass top-level nodes */
+            {
+              if(mass > 0)
+                endrun(989);
+              no = nop->u.d.nextnode;
+              continue;
+            }
+          else
+            {
+              if(h < All.ForceSoftening[maxsofttype])
+                {
+                  h = All.ForceSoftening[maxsofttype];
+                  if(r2 < h * h)
+                    {
+                      /* bit-5 signals that there are particles of
+                       * different softening in the node
+                       */
+                      if(((nop->u.d.bitflags >> 5) & 1))
+                        {
+                          no = nop->u.d.nextnode;
+                          continue;
+                        }
+                    }
+                }
 	    }
 #else
-	  h = soft;
+	  if(ptype == 0)
+	    h = soft;
+	  else
+	    h = All.ForceSoftening[ptype];
 
 	  if(h < nop->maxsoft)
 	    {
@@ -2972,7 +2581,7 @@ void force_treeevaluate_potential_shortrange(int target, int mode)
 	  fac = shortrange_table_potential[tabindex];
 
 	  if(r >= h)
-	    pot += FLT(-fac * mass / r);
+	    pot -= fac * mass / r;
 	  else
 	    {
 #ifdef UNEQUALSOFTENINGS
@@ -2986,7 +2595,7 @@ void force_treeevaluate_potential_shortrange(int target, int mode)
 		wp =
 		  -3.2 + 0.066666666667 / u + u * u * (10.666666666667 +
 						       u * (-16.0 + u * (9.6 - 2.133333333333 * u)));
-	      pot += FLT(fac * mass * h_inv * wp);
+	      pot += fac * mass * h_inv * wp;
 	    }
 	}
     }
@@ -2994,21 +2603,19 @@ void force_treeevaluate_potential_shortrange(int target, int mode)
 
   /* store result at the proper place */
   if(mode == 0)
-    P[target].p.dPotential = pot;
+    P[target].Potential = pot;
   else
-    GravDataResult[target].v.Potential = pot;
+    GravDataResult[target].u.Potential = pot;
 }
 
 #endif
 
-#endif /*  end of COMPUTE_POTENTIAL_ENERGY/OUTPUTPOTENTIAL block */
-
 
 
 /*! This function allocates the memory used for storage of the tree and of
- *  auxiliary arrays needed for tree-walk and link-lists.  Usually, maxnodes
- *  approximately equal to 0.7*maxpart is sufficient to store the tree for up
- *  to maxpart particles.
+ *  auxiliary arrays needed for tree-walk and link-lists.  Usually,
+ *  maxnodes approximately equal to 0.7*maxpart is sufficient to store the
+ *  tree for up to maxpart particles.
  */
 void force_treeallocate(int maxnodes, int maxpart)
 {
@@ -3019,14 +2626,14 @@ void force_treeallocate(int maxnodes, int maxpart)
 
   MaxNodes = maxnodes;
 
-  if(!(Nodes_base = (struct NODE *) mymalloc(bytes = (MaxNodes + 1) * sizeof(struct NODE))))
+  if(!(Nodes_base = malloc(bytes = (MaxNodes + 1) * sizeof(struct NODE))))
     {
       printf("failed to allocate memory for %d tree-nodes (%g MB).\n", MaxNodes, bytes / (1024.0 * 1024.0));
       endrun(3);
     }
   allbytes += bytes;
 
-  if(!(Extnodes_base = (struct extNODE *) mymalloc(bytes = (MaxNodes + 1) * sizeof(struct extNODE))))
+  if(!(Extnodes_base = malloc(bytes = (MaxNodes + 1) * sizeof(struct extNODE))))
     {
       printf("failed to allocate memory for %d tree-extnodes (%g MB).\n", MaxNodes,
 	     bytes / (1024.0 * 1024.0));
@@ -3037,7 +2644,7 @@ void force_treeallocate(int maxnodes, int maxpart)
   Nodes = Nodes_base - All.MaxPart;
   Extnodes = Extnodes_base - All.MaxPart;
 
-  if(!(Nextnode = (int *) mymalloc(bytes = (maxpart + MAXTOPNODES) * sizeof(int))))
+  if(!(Nextnode = malloc(bytes = (maxpart + MAXTOPNODES) * sizeof(int))))
     {
       printf("Failed to allocate %d spaces for 'Nextnode' array (%g MB)\n", maxpart + MAXTOPNODES,
 	     bytes / (1024.0 * 1024.0));
@@ -3045,7 +2652,7 @@ void force_treeallocate(int maxnodes, int maxpart)
     }
   allbytes += bytes;
 
-  if(!(Father = (int *) mymalloc(bytes = (maxpart) * sizeof(int))))
+  if(!(Father = malloc(bytes = (maxpart) * sizeof(int))))
     {
       printf("Failed to allocate %d spaces for 'Father' array (%g MB)\n", maxpart, bytes / (1024.0 * 1024.0));
       exit(0);
@@ -3058,7 +2665,7 @@ void force_treeallocate(int maxnodes, int maxpart)
 
       if(ThisTask == 0)
 	printf("\nAllocated %g MByte for BH-tree. %d\n\n", allbytes / (1024.0 * 1024.0),
-	       (int) (sizeof(struct NODE) + sizeof(struct extNODE)));
+	       sizeof(struct NODE) + sizeof(struct extNODE));
 
       tabfac = NTAB / 3.0;
 
@@ -3072,15 +2679,15 @@ void force_treeallocate(int maxnodes, int maxpart)
 }
 
 
-/*! This function frees the memory allocated for the tree, i.e. it frees the
- *  space allocated by the function force_treeallocate().
+/*! This function frees the memory allocated for the tree, i.e. it frees
+ *  the space allocated by the function force_treeallocate().
  */
 void force_treefree(void)
 {
-  myfree(Father);
-  myfree(Nextnode);
-  myfree(Extnodes_base);
-  myfree(Nodes_base);
+  free(Father);
+  free(Nextnode);
+  free(Extnodes_base);
+  free(Nodes_base);
 }
 
 
@@ -3095,7 +2702,7 @@ void force_treefree(void)
 int force_treeevaluate_direct(int target, int mode)
 {
   double epsilon;
-  double h, h_inv, dx, dy, dz, r, r2, u, r_inv, fac, dmax1, dmax2;
+  double h, h_inv, dx, dy, dz, r, r2, u, r_inv, fac;
   int i, ptype;
   double pos_x, pos_y, pos_z;
   double acc_x, acc_y, acc_z;
@@ -3126,12 +2733,16 @@ int force_treeevaluate_direct(int target, int mode)
       pos_x = GravDataGet[target].u.Pos[0];
       pos_y = GravDataGet[target].u.Pos[1];
       pos_z = GravDataGet[target].u.Pos[2];
-      ptype = GravDataGet[target].v.Type;
+#ifdef UNEQUALSOFTENINGS
+      ptype = GravDataGet[target].Type;
+#else
+      ptype = P[0].Type;
+#endif
     }
 
   for(i = 0; i < NumPart; i++)
     {
-      epsilon = DMAX(All.ForceSoftening[P[i].Type], All.ForceSoftening[ptype]);
+      epsilon = dmax(All.ForceSoftening[P[i].Type], All.ForceSoftening[ptype]);
 
       h = epsilon;
       h_inv = 1 / h;
@@ -3214,10 +2825,10 @@ int force_treeevaluate_direct(int target, int mode)
 #endif
 
 
-/*! This function dumps some of the basic particle data to a file. If the tree
- * construction fails, it is called just before the run terminates with an
- * error message. Examination of the generated file may then give clues to
- * what caused the problem.
+/*! This function dumps some of the basic particle data to a file. In case
+ *  the tree construction fails, it is called just before the run
+ *  terminates with an error message. Examination of the generated file may
+ *  then give clues to what caused the problem.
  */
 void dump_particles(void)
 {
@@ -3246,17 +2857,17 @@ void dump_particles(void)
 #ifdef PERIODIC
 
 /*! This function initializes tables with the correction force and the
- *  correction potential due to the periodic images of a point mass located at
- * the origin. These corrections are obtained by Ewald summation. (See
- * Hernquist, Bouchet, Suto, ApJS, 1991, 75, 231) The correction fields are
- * used to obtain the full periodic force if periodic boundaries combined with
- * the pure tree algorithm are used. For the TreePM algorithm, the Ewald
- * correction is not used.
+ *  correction potential due to the periodic images of a point mass located
+ *  at the origin. These corrections are obtained by Ewald summation. (See
+ *  Hernquist, Bouchet, Suto, ApJS, 1991, 75, 231) The correction fields
+ *  are used to obtain the full periodic force if periodic boundaries
+ *  combined with the pure tree algorithm are used. For the TreePM
+ *  algorithm, the Ewald correction is not used.
  *
- * The correction fields are stored on disk once they are computed. If a
- * corresponding file is found, they are loaded from disk to speed up the
- * initialization.  The Ewald summation is done in parallel, i.e. the
- * processors share the work to compute the tables if needed.
+ *  The correction fields are stored on disk once they are computed. If a
+ *  corresponding file is found, they are loaded from disk to speed up the
+ *  initialization.  The Ewald summation is done in parallel, i.e. the
+ *  processors share the work to compute the tables if needed.
  */
 void ewald_init(void)
 {
@@ -3400,11 +3011,11 @@ void ewald_init(void)
 }
 
 
-/*! This function looks up the correction force due to the infinite number of
- * periodic particle/node images. We here use trilinear interpolation to get
- * it from the precomputed tables, which contain one octant around the target
- * particle at the origin. The other octants are obtained from it by
- * exploiting the symmetry properties.
+/*! This function looks up the correction force due to the infinite number
+ *  of periodic particle/node images. We here use trilinear interpolation
+ *  to get it from the precomputed tables, which contain one octant
+ *  around the target particle at the origin. The other octants are
+ *  obtained from it by exploiting the symmetry properties.
  */
 #ifdef FORCETEST
 void ewald_corr(double dx, double dy, double dz, double *fper)
@@ -3490,11 +3101,11 @@ void ewald_corr(double dx, double dy, double dz, double *fper)
 #endif
 
 
-/*! This function looks up the correction potential due to the infinite number
- * of periodic particle/node images. We here use tri-linear interpolation to
- * get it from the precomputed table, which contains one octant around the
- * target particle at the origin. The other octants are obtained from it by
- * exploiting symmetry properties.
+/*! This function looks up the correction potential due to the infinite
+ *  number of periodic particle/node images. We here use tri-linear
+ *  interpolation to get it from the precomputed table, which contains
+ *  one octant around the target particle at the origin. The other
+ *  octants are obtained from it by exploiting symmetry properties.
  */
 double ewald_pot_corr(double dx, double dy, double dz)
 {
@@ -3547,7 +3158,7 @@ double ewald_pot_corr(double dx, double dy, double dz)
 
 
 /*! This function computes the potential correction term by means of Ewald
- * summation.
+ *  summation.
  */
 double ewald_psi(double x[3])
 {

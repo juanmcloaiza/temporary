@@ -9,16 +9,18 @@
 #include "allvars.h"
 #include "proto.h"
 
-#ifdef COSMIC_RAYS
-#include "cosmic_rays.h"
-#endif
 
-/*  This function aborts the simulations. If a single processors
- *  wants an immediate termination,  the function needs to be 
- *  called with ierr>0. A bunch of MPI-error messages will also
- *  appear in this case.
- *  For ierr=0, MPI is gracefully cleaned up, but this requires
- *  that all processors call endrun().
+/*! \file endrun.c 
+ *  \brief Termination of simulation
+ *
+ *  This file contains routines for termination of the simulation.
+ */
+
+/*!  This function aborts the simulations. If a single processors wants an
+ *   immediate termination, the function needs to be called with ierr>0. A
+ *   bunch of MPI-error messages may also appear in this case.  For ierr=0,
+ *   MPI is gracefully cleaned up, but this requires that all processors
+ *   call endrun().
  */
 void endrun(int ierr)
 {
@@ -35,10 +37,6 @@ void endrun(int ierr)
 #endif
       exit(0);
     }
-
-#ifdef COSMIC_RAYS
-  CR_free_beta_tabs();
-#endif
 
   MPI_Finalize();
   exit(0);

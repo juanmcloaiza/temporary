@@ -14,21 +14,23 @@
 #include "allvars.h"
 #include "proto.h"
 
+/*! \file restart.c
+ *  \brief Code for reading and writing restart files
+ */
 
 static FILE *fd;
 
 static void in(int *x, int modus);
-static void byten(void *x, int n, int modus);
+static void byten(void *x, size_t n, int modus);
 
 
-/* This function reads or writes the restart files.
- * Each processor writes its own restart file, with the
- * I/O being done in parallel. To avoid congestion of the disks
- * you can tell the program to restrict the number of files
- * that are simultaneously written to NumFilesWrittenInParallel.
+/*! This function reads or writes the restart files.  Each processor writes
+ *  its own restart file, with the I/O being done in parallel. To avoid
+ *  congestion of the disks you can tell the program to restrict the number of
+ *  files that are simultaneously written to NumFilesWrittenInParallel.
  *
- * If modus>0  the restart()-routine reads, 
- * if modus==0 it writes a restart file. 
+ *  If modus>0 the restart()-routine reads, if modus==0 it writes a restart
+ *  file.
  */
 void restart(int modus)
 {
@@ -37,16 +39,6 @@ void restart(int modus)
   int i, nprocgroup, masterTask, groupTask, old_MaxPart, old_MaxNodes;
   struct global_data_all_processes all_task0;
 
-
-#if defined(SFR) || defined(BLACK_HOLES) || defined(MYSWITCH)
-#ifdef NO_TREEDATA_IN_RESTART
-  if(modus == 0)
-    {
-      rearrange_particle_sequence();
-      All.NumForcesSinceLastDomainDecomp = 1 + All.TreeDomainUpdateFrequency * All.TotNumPart;	/* ensures that new tree will be constructed */
-    }
-#endif
-#endif
 
   sprintf(buf, "%s%s.%d", All.OutputDir, All.RestartFile, ThisTask);
   sprintf(buf_bak, "%s%s.%d.bak", All.OutputDir, All.RestartFile, ThisTask);
@@ -83,9 +75,8 @@ void restart(int modus)
 	    }
 	  else
 	    {
-#ifndef NOCALLSOFSYSTEM
 	      system(buf_mv);	/* move old restart files to .bak files */
-#endif
+
 	      if(!(fd = fopen(buf, "w")))
 		{
 		  printf("Restart file '%s' cannot be opened.\n", buf);
@@ -109,28 +100,15 @@ void restart(int modus)
 	    }
 
 	  old_MaxPart = All.MaxPart;
-	  old_MaxNodes = (int) (All.TreeAllocFactor * All.MaxPart);
+	  old_MaxNodes = All.TreeAllocFactor * All.MaxPart;
 
 	  if(modus)		/* read */
 	    {
 	      if(All.PartAllocFactor != save_PartAllocFactor)
 		{
 		  All.PartAllocFactor = save_PartAllocFactor;
-		  All.MaxPart = (int) (All.PartAllocFactor * (All.TotNumPart / NTask));
-		  All.MaxPartSph = (int) (All.PartAllocFactor * (All.TotN_gas / NTask));
-#ifdef INHOMOG_GASDISTR_HINT
-		  All.MaxPartSph = All.MaxPart;
-#endif
-#ifdef LT_STELLAREVOLUTION
-		  if(All.TotN_star == 0)
-		    All.MaxPartMet =
-		      All.PartAllocFactor * (All.TotN_gas / NTask) * All.SFfactor * All.Generations;
-		  else
-		    All.MaxPartMet =
-		      All.PartAllocFactor * (All.TotN_star / NTask +
-					     (All.TotN_gas / NTask) * All.SFfactor * All.Generations);
-#endif
-
+		  All.MaxPart = All.PartAllocFactor * (All.TotNumPart / NTask);
+		  All.MaxPartSph = All.PartAllocFactor * (All.TotN_gas / NTask);
 		  save_PartAllocFactor = -1;
 		}
 
@@ -184,37 +162,18 @@ void restart(int modus)
 	  byten(gsl_rng_state(random_generator), gsl_rng_size(random_generator), modus);
 
 
-#ifndef NO_TREEDATA_IN_RESTART
 	  /* now store relevant data for tree */
-#ifdef SFR
-	  in(&Stars_converted, modus);
-#endif
+
 	  if(modus)		/* read */
 	    {
 	      ngb_treeallocate(MAX_NGB);
 
-	      force_treeallocate((int) (All.TreeAllocFactor * All.MaxPart), All.MaxPart);
+	      force_treeallocate(All.TreeAllocFactor * All.MaxPart, All.MaxPart);
 	    }
 
-#ifdef LT_STELLAREVOLUTION
-          in(&N_star, modus);
-
-          if(N_star > 0)
-            {
-              if(N_star > All.MaxPartMet)
-                {
-                  printf
-                    ("MET: it seems you have reduced(!) 'PartAllocFactor' below the value of %g needed to load the restart file.\n",
-                     N_star / (((double) All.TotN_star) / NTask));
-                  printf("fatal error\n");
-                  endrun(2222);
-                }
-              /* Sph-Particle data  */
-              byten(&MetP[0], N_star * sizeof(struct met_particle_data), modus);
-            }
-#endif
 
 	  in(&Numnodestree, modus);
+	  in(&NTopleaves, modus);
 
 	  if(Numnodestree > MaxNodes)
 	    {
@@ -227,16 +186,6 @@ void restart(int modus)
 	  byten(Nodes_base, Numnodestree * sizeof(struct NODE), modus);
 	  byten(Extnodes_base, Numnodestree * sizeof(struct extNODE), modus);
 
-	  in(&NTopnodes, modus);
-	  if(NTopnodes > MAXTOPNODES)
-	    {
-	      printf
-		("Tree storage: it seems you have reduced(!) 'MAXTOPNODES' below the value needed to load the restart file (task=%d). "
-		 "NTopnodes=%d  MAXTOPNODES=%d\n", ThisTask, NTopnodes, MAXTOPNODES);
-	      endrun(2212);
-	    }
-	  byten(TopNodes, NTopnodes * sizeof(struct topnode_data), modus);
-
 	  byten(Father, NumPart * sizeof(int), modus);
 
 	  byten(Nextnode, NumPart * sizeof(int), modus);
@@ -246,6 +195,7 @@ void restart(int modus)
 	  byten(DomainEndList, NTask * sizeof(int), modus);
 	  byten(DomainTask, MAXTOPNODES * sizeof(int), modus);
 	  byten(DomainNodeIndex, MAXTOPNODES * sizeof(int), modus);
+	  byten(DomainTreeNodeLen, MAXTOPNODES * sizeof(FLOAT), modus);
 	  byten(DomainHmax, MAXTOPNODES * sizeof(FLOAT), modus);
 	  byten(DomainMoment, MAXTOPNODES * sizeof(struct DomainNODE), modus);
 
@@ -255,9 +205,6 @@ void restart(int modus)
 	  byten(&DomainFac, sizeof(double), modus);
 	  byten(&DomainMyStart, sizeof(int), modus);
 	  byten(&DomainMyLast, sizeof(int), modus);
-
-         if(modus) /* read */
-            NTopleaves = DomainEndList[NTask-1];
 
 	  if(modus)		/* read */
 	    if(All.PartAllocFactor != save_PartAllocFactor || All.TreeAllocFactor != save_TreeAllocFactor)
@@ -321,7 +268,7 @@ void restart(int modus)
 			DomainNodeIndex[i] += (All.MaxPart - old_MaxPart);
 		    }
 	      }
-#endif
+
 	  fclose(fd);
 	}
       else			/* wait inside the group */
@@ -338,9 +285,9 @@ void restart(int modus)
 
 
 
-/* reads/writes n bytes 
+/*! reads/writes n bytes in restart routine 
  */
-void byten(void *x, int n, int modus)
+void byten(void *x, size_t n, int modus)
 {
   if(modus)
     my_fread(x, n, 1, fd);
@@ -349,7 +296,7 @@ void byten(void *x, int n, int modus)
 }
 
 
-/* reads/writes one int 
+/*! reads/writes one `int' variable in restart routine 
  */
 void in(int *x, int modus)
 {

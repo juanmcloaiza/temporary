@@ -14,152 +14,26 @@
 #include "proto.h"
 
 
-
-#ifdef DEBUG
-#include <fenv.h>
-void enable_core_dumps_and_fpu_exceptions(void)
-{
-  struct rlimit rlim;
-  extern int feenableexcept(int __excepts);
-
-  /* enable floating point exceptions */
-
-  /*
-  feenableexcept(FE_DIVBYZERO | FE_INVALID);
-  */
-
-  /* Note: FPU exceptions appear not to work properly 
-   * when the Intel C-Compiler for Linux is used
-   */
-
-  /* set core-dump size to infinity */
-  getrlimit(RLIMIT_CORE, &rlim);
-  rlim.rlim_cur = RLIM_INFINITY;
-  setrlimit(RLIMIT_CORE, &rlim);
-
-  /* MPICH catches the signales SIGSEGV, SIGBUS, and SIGFPE....
-   * The following statements reset things to the default handlers,
-   * which will generate a core file.  
-   */
-  /*
-     signal(SIGSEGV, catch_fatal);
-     signal(SIGBUS, catch_fatal);
-     signal(SIGFPE, catch_fatal);
-     signal(SIGINT, catch_fatal);
-   */
-
-  signal(SIGSEGV, SIG_DFL);
-  signal(SIGBUS, SIG_DFL);
-  signal(SIGFPE, SIG_DFL);
-  signal(SIGINT, SIG_DFL);
-
-  /* Establish a handler for SIGABRT signals. */
-  signal(SIGABRT, catch_abort);
-}
+/*! \file system.c
+ *  \brief contains miscellaneous routines, e.g. elapsed time measurements
+ */
 
 
-void catch_abort(int sig)
-{
-  MPI_Finalize();
-  exit(0);
-}
-
-void catch_fatal(int sig)
-{
-  terminate_processes();
-  MPI_Finalize();
-
-  signal(sig, SIG_DFL);
-  raise(sig);
-}
-
-
-void terminate_processes(void)
-{
-  pid_t my_pid;
-  char buf[500], hostname[500], *cp;
-  char commandbuf[500];
-  FILE *fd;
-  int i, pid;
-
-  sprintf(buf, "%s%s", All.OutputDir, "PIDs.txt");
-
-  my_pid = getpid();
-
-  if((fd = fopen(buf, "r")))
-    {
-      for(i = 0; i < NTask; i++)
-	{
-	  fscanf(fd, "%s %d", hostname, &pid);
-
-	  cp = hostname;
-	  while(*cp)
-	    {
-	      if(*cp == '.')
-		*cp = 0;
-	      else
-		cp++;
-	    }
-
-	  if(my_pid != pid)
-	    {
-	      sprintf(commandbuf, "ssh %s kill -ABRT %d", hostname, pid);
-	      printf("--> %s\n", commandbuf);
-	      fflush(stdout);
-#ifndef NOCALLSOFSYSTEM
-	      system(commandbuf);
-#endif
-	    }
-	}
-
-      fclose(fd);
-    }
-}
-
-void write_pid_file(void)
-{
-  pid_t my_pid;
-  char mode[8], buf[500];
-  FILE *fd;
-  int i;
-
-  my_pid = getpid();
-
-  sprintf(buf, "%s%s", All.OutputDir, "PIDs.txt");
-
-  if(RestartFlag == 0)
-    strcpy(mode, "w");
-  else
-    strcpy(mode, "a");
-
-  for(i = 0; i < NTask; i++)
-    {
-      if(ThisTask == i)
-	{
-	  if(ThisTask == 0)
-	    sprintf(mode, "w");
-	  else
-	    sprintf(mode, "a");
-
-	  if((fd = fopen(buf, mode)))
-	    {
-	      fprintf(fd, "%s %d\n", getenv("HOST"), (int) my_pid);
-	      fclose(fd);
-	    }
-	}
-
-      MPI_Barrier(MPI_COMM_WORLD);
-    }
-}
-#endif
-
-
-
-double get_random_number(unsigned int id)
+/*! This routine returns a random number taken from a table of random numbers,
+ *  which is refilled every timestep.  This method is used to allow random
+ *  number application to particles independent of the number of processors
+ *  used, and independent of the particular order the particles have. In order
+ *  to work properly, the particle IDs should be set properly to unique
+ *  integer values.
+ */
+double get_random_number(int id)
 {
   return RndTable[(id % RNDTABLE)];
 }
 
+
+/*! This routine fills the random number table.
+ */
 void set_random_numbers(void)
 {
   int i;
@@ -169,8 +43,8 @@ void set_random_numbers(void)
 }
 
 
-/* returns the number of cpu-ticks in seconds that
- * have elapsed. (or the wall-clock time)
+/*! returns the number of cpu-ticks in seconds that have elapsed, or the
+ *  wall-clock time obtained with MPI_Wtime().
  */
 double second(void)
 {
@@ -179,15 +53,19 @@ double second(void)
 #else
   return ((double) clock()) / CLOCKS_PER_SEC;
 #endif
-
+  
   /* note: on AIX and presumably many other 32bit systems, 
    * clock() has only a resolution of 10ms=0.01sec 
    */
 }
 
-/* returns the time difference between two measurements 
- * obtained with second(). The routine takes care of the 
- * possible overflow of the tick counter on 32bit systems.
+
+/*! returns the time difference between two measurements obtained with
+ *  second(). The routine takes care of the possible overflow of the tick
+ *  counter on 32bit systems, but depending on the system, this may not always
+ *  work properly. Similarly, in some MPI implementations, the MPI_Wtime()
+ *  function may also overflow, in which case a negative time difference would
+ *  be returned. The routine returns instead a time difference equal to 0.
  */
 double timediff(double t0, double t1)
 {
@@ -195,7 +73,7 @@ double timediff(double t0, double t1)
 
   dt = t1 - t0;
 
-  if(dt < 0)			/* overflow has occured (for systems with 32bit tick counter) */
+  if(dt < 0)	/* overflow has occured (for systems with 32bit tick counter) */
     {
 #ifdef WALLCLOCK
       dt = 0;
@@ -208,24 +86,42 @@ double timediff(double t0, double t1)
 }
 
 
-
-
-#ifdef X86FIX
-
-#define _FPU_SETCW(x) asm volatile ("fldcw %0": :"m" (x));
-#define _FPU_GETCW(x) asm volatile ("fnstcw %0":"=m" (x));
-#define _FPU_EXTENDED 0x0300
-#define _FPU_DOUBLE   0x0200
-
-void x86_fix(void) 
+/*! returns the maximum of two double
+ */
+double dmax(double x, double y)
 {
-  unsigned short dummy, new_cw;
-  unsigned short *old_cw;
-  old_cw = &dummy;
-
-  _FPU_GETCW(*old_cw);
-   new_cw = (*old_cw & ~_FPU_EXTENDED) | _FPU_DOUBLE;
-  _FPU_SETCW(new_cw);
+  if(x > y)
+    return x;
+  else
+    return y;
 }
 
-#endif
+/*! returns the minimum of two double
+ */
+double dmin(double x, double y)
+{
+  if(x < y)
+    return x;
+  else
+    return y;
+}
+
+/*! returns the maximum of two integers
+ */
+int imax(int x, int y)
+{
+  if(x > y)
+    return x;
+  else
+    return y;
+}
+
+/*! returns the minimum of two integers
+ */
+int imin(int x, int y)
+{
+  if(x < y)
+    return x;
+  else
+    return y;
+}

@@ -9,63 +9,25 @@
 #include "allvars.h"
 #include "proto.h"
 
+/*! \file driftfac.c
+ *  \brief compute loop-up tables for prefactors in cosmological integration
+ */
 
 static double logTimeBegin;
 static double logTimeMax;
 
 
-double drift_integ(double a, void *param)
-{
-  double h;
-
-  h = hubble_function(a);
-
-  return 1 / (h * a * a * a);
-}
-
-double gravkick_integ(double a, void *param)
-{
-  double h;
-
-  h = hubble_function(a);
-
-  return 1 / (h * a * a);
-}
-
-
-double hydrokick_integ(double a, void *param)
-{
-  double h;
-
-  h = hubble_function(a);
-
-  return 1 / (h * pow(a, 3 * GAMMA_MINUS1) * a);
-}
-
-double growthfactor_integ(double a, void *param)
-{
-  double s;
-
-  s = hubble_function(a) / All.Hubble * sqrt(a * a * a);
-
-  return pow(sqrt(a) / s, 3);
-}
-
-
+/*! This function computes look-up tables for factors needed in
+ *  cosmological integrations. The (simple) integrations are carried out
+ *  with the GSL library.  Separate factors are computed for the "drift",
+ *  and the gravitational and hydrodynamical "kicks".  The lookup-table is
+ *  used for reasons of speed.
+ */
 void init_drift_table(void)
 {
 #define WORKSIZE 100000
   int i;
   double result, abserr;
-  /*---------- DEBUG ! ------------*/
-  FILE *FdDKfac;
-  char mode[2],buf[200];
-  strcpy(mode, "w");
-  sprintf(buf, "%s%s", All.OutputDir, "driftkickfac.txt");
-  FdDKfac = fopen(buf, mode);
-  fprintf(FdDKfac, "i a drift GravKick HydroKick\n");
-  /*---------- DEBUG ! ------------*/
-
   gsl_function F;
   gsl_integration_workspace *workspace;
 
@@ -77,40 +39,30 @@ void init_drift_table(void)
   for(i = 0; i < DRIFT_TABLE_LENGTH; i++)
     {
       F.function = &drift_integ;
-      gsl_integration_qag(&F, exp(logTimeBegin), exp(logTimeBegin + ((logTimeMax - logTimeBegin) / DRIFT_TABLE_LENGTH) * (i + 1)), All.Hubble,	/* note: absolute error just a dummy */
+      gsl_integration_qag(&F, exp(logTimeBegin), exp(logTimeBegin + ((logTimeMax - logTimeBegin) / DRIFT_TABLE_LENGTH) * (i + 1)), 0,
 			  1.0e-8, WORKSIZE, GSL_INTEG_GAUSS41, workspace, &result, &abserr);
       DriftTable[i] = result;
 
 
       F.function = &gravkick_integ;
-      gsl_integration_qag(&F, exp(logTimeBegin), exp(logTimeBegin + ((logTimeMax - logTimeBegin) / DRIFT_TABLE_LENGTH) * (i + 1)), All.Hubble,	/* note: absolute error just a dummy */
+      gsl_integration_qag(&F, exp(logTimeBegin), exp(logTimeBegin + ((logTimeMax - logTimeBegin) / DRIFT_TABLE_LENGTH) * (i + 1)), 0,
 			  1.0e-8, WORKSIZE, GSL_INTEG_GAUSS41, workspace, &result, &abserr);
       GravKickTable[i] = result;
 
 
       F.function = &hydrokick_integ;
-      gsl_integration_qag(&F, exp(logTimeBegin), exp(logTimeBegin + ((logTimeMax - logTimeBegin) / DRIFT_TABLE_LENGTH) * (i + 1)), All.Hubble,	/* note: absolute error just a dummy */
+      gsl_integration_qag(&F, exp(logTimeBegin), exp(logTimeBegin + ((logTimeMax - logTimeBegin) / DRIFT_TABLE_LENGTH) * (i + 1)), 0,
 			  1.0e-8, WORKSIZE, GSL_INTEG_GAUSS41, workspace, &result, &abserr);
       HydroKickTable[i] = result;
-  /*---------- DEBUG ! ------------*/
-      fprintf(FdDKfac, "%d %e %e %e %e \n",i, exp(logTimeBegin + ((logTimeMax - logTimeBegin) / DRIFT_TABLE_LENGTH) * (i + 1)),
-                                           DriftTable[i],GravKickTable[i],HydroKickTable[i]);
-  /*---------- DEBUG ! ------------*/
     }
 
   gsl_integration_workspace_free(workspace);
-  /*---------- DEBUG ! ------------*/
-  fclose(FdDKfac);
-  /*---------- DEBUG ! ------------*/
 }
 
 
-/*! This function integrates the cosmological prefactor for a drift
- *   step between time0 and time1. The value returned is
- *  \f[ \int_{a_0}^{a_1} \frac{{\rm d}a}{H(a)}
- *  \f]
- *  
- *  A lookup-table is used for reasons of speed. 
+/*! This function integrates the cosmological prefactor for a drift step
+ *  between time0 and time1. The value returned is * \f[ \int_{a_0}^{a_1}
+ *  \frac{{\rm d}a}{H(a)} * \f]
  */
 double get_drift_factor(int time0, int time1)
 {
@@ -147,6 +99,9 @@ double get_drift_factor(int time0, int time1)
 }
 
 
+/*! This function integrates the cosmological prefactor for a kick step of
+ *  the gravitational force.
+ */
 double get_gravkick_factor(int time0, int time1)
 {
   double a1, a2, df1, df2, u1, u2;
@@ -181,6 +136,9 @@ double get_gravkick_factor(int time0, int time1)
   return df2 - df1;
 }
 
+/*! This function integrates the cosmological prefactor for a kick step of
+ *  the hydrodynamical force.
+ */
 double get_hydrokick_factor(int time0, int time1)
 {
   double a1, a2, df1, df2, u1, u2;
@@ -214,3 +172,53 @@ double get_hydrokick_factor(int time0, int time1)
 
   return df2 - df1;
 }
+
+
+/*! Integration kernel for drift factor computation.
+ */
+double drift_integ(double a, void *param)
+{
+  double h;
+
+  h = All.Omega0 / (a * a * a) + (1 - All.Omega0 - All.OmegaLambda) / (a * a) + All.OmegaLambda;
+  h = All.Hubble * sqrt(h);
+
+  return 1 / (h * a * a * a);
+}
+
+/*! Integration kernel for gravitational kick factor computation.
+ */
+double gravkick_integ(double a, void *param)
+{
+  double h;
+
+  h = All.Omega0 / (a * a * a) + (1 - All.Omega0 - All.OmegaLambda) / (a * a) + All.OmegaLambda;
+  h = All.Hubble * sqrt(h);
+
+  return 1 / (h * a * a);
+}
+
+
+/*! Integration kernel for hydrodynamical kick factor computation.
+ */
+double hydrokick_integ(double a, void *param)
+{
+  double h;
+
+  h = All.Omega0 / (a * a * a) + (1 - All.Omega0 - All.OmegaLambda) / (a * a) + All.OmegaLambda;
+  h = All.Hubble * sqrt(h);
+
+  return 1 / (h * pow(a, 3 * GAMMA_MINUS1) * a);
+}
+
+double growthfactor_integ(double a, void *param)
+{
+  double s;
+
+  s = All.Omega0 + (1 - All.Omega0 - All.OmegaLambda) * a + All.OmegaLambda * a * a * a;
+  s = sqrt(s);
+
+  return pow(sqrt(a) / s, 3);
+}
+
+

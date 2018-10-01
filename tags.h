@@ -1,3 +1,6 @@
+/*! \file tags.h
+ *  \brief declares various tags for labelling MPI messages.
+ */
 
 #define TAG_N             10      /*!< Various tags used for labelling MPI messages */ 
 #define TAG_HEADER        11
@@ -27,25 +30,4 @@
 #define TAG_DENS_A        35
 #define TAG_DENS_B        36
 #define TAG_LOCALN        37
-#define TAG_BH_A          38
-#define TAG_BH_B          39
-#define TAG_BSMTH_A       40
-#define TAG_BSMTH_B       41
-#define TAG_ENRICH_A      42
-#define TAG_CONDUCT_A     43
-#define TAG_CONDUCT_B     44
-#define TAG_FOF_A         45
-#define TAG_FOF_B         46
-#define TAG_FOF_C         47
-#define TAG_FOF_D         48
-#define TAG_FOF_E         49
-#define TAG_FOF_F         50
-#define TAG_FOF_G         51
-#define TAG_HOTNGB_A      52
-#define TAG_HOTNGB_B      53
-
-#ifdef LT_STELLAREVOLUTION
-#define TAG_SE            54
-#define TAG_METDATA       55
-#endif
 

@@ -7,23 +7,33 @@
 #include "allvars.h"
 #include "proto.h"
 //Added by JM:
+//Check code units
+#define M_DISC 33.0
+#define R_DISC 30.0
+#define a_plumm 0.5*R_DISC
+#define M_plumm 7.0*M_DISC
+//#define my_a 1.0
+//#define my_Ma 1.0
+//#define my_Mbh 0.0e-2
+//#define my_Mcore 2.0e-2
+//#define my_rcore 2.0e-2
 //END of Added by JM
-
-/*! \file gravtree.c
+/*! \file gravtree.c 
  *  \brief main driver routines for gravitational (short-range) force computation
  *
  *  This file contains the code for the gravitational force computation by
- *  means of the tree algorithm. To this end, a tree force is computed for all
- *  active local particles, and particles are exported to other processors if
- *  needed, where they can receive additional force contributions. If the
- *  TreePM algorithm is enabled, the force computed will only be the
- *  short-range part.
+ *  means of the tree algorithm. To this end, a tree force is computed for
+ *  all active local particles, and particles are exported to other
+ *  processors if needed, where they can receive additional force
+ *  contributions. If the TreePM algorithm is enabled, the force computed
+ *  will only be the short-range part.
  */
 
-/*! This function computes the gravitational forces for all active particles.
- *  If needed, a new tree is constructed, otherwise the dynamically updated
- *  tree is used.  Particles are only exported to other processors when really
- *  needed, thereby allowing a good use of the communication buffer.
+/*! This function computes the gravitational forces for all active
+ *  particles.  If needed, a new tree is constructed, otherwise the
+ *  dynamically updated tree is used.  Particles are only exported to other
+ *  processors when really needed, thereby allowing a good use of the
+ *  communication buffer.
  */
 void gravity_tree(void)
 {
@@ -37,35 +47,24 @@ void gravity_tree(void)
   double maxt, sumt, *timetreelist, *timecommlist;
   double fac, plb, plb_max, sumcomm;
 
-  int k;
-
 #ifndef NOGRAVITY
   int *noffset, *nbuffer, *nsend, *nsend_local;
   long long ntotleft;
   int ndone, maxfill, ngrp;
-  int place;
+  int k, place;
   int level, sendTask, recvTask;
   double ax, ay, az;
   MPI_Status status;
 #endif
-#ifdef STATICNFW
-  double r, m;
-#endif
-#ifdef STATICHQ
-  double r, m, a;
-#endif
-#ifdef EVALPOTENTIAL
-  double r2;
-#endif
 //Added by JM
-//  for(i = 0, NumForceUpdate = 0; i < NumPart; i++)
-//  {
-//    if(P[i].Ti_endstep == All.Ti_Current)
-//#ifdef SELECTIVE_NO_GRAVITY
-//      if(!((1 << P[i].Type) & (SELECTIVE_NO_GRAVITY)))
-//#endif
-//        NumForceUpdate++;
-//  } 
+  for(i = 0, NumForceUpdate = 0; i < NumPart; i++)
+  {
+    if(P[i].Ti_endstep == All.Ti_Current)
+#ifdef SELECTIVE_NO_GRAVITY
+      if(!((1 << P[i].Type) & (SELECTIVE_NO_GRAVITY)))
+#endif
+        NumForceUpdate++;
+  } 
 //End of Added by JM
   /* set new softening lengths */
   if(All.ComovingIntegrationOn)
@@ -79,9 +78,6 @@ void gravity_tree(void)
       if(ThisTask == 0)
 	printf("Tree construction.\n");
 
-#if defined(SFR) || defined(BLACK_HOLES) || defined(MYSWITCH)
-      rearrange_particle_sequence();
-#endif
       force_treebuild(NumPart);
 
       TreeReconstructFlag = 0;
@@ -89,57 +85,39 @@ void gravity_tree(void)
       if(ThisTask == 0)
 	printf("Tree construction done.\n");
     }
-  else
-    {
-      if(ThisTask == 0)
-	printf("Tree update.\n");
-
-      force_dynamic_update();
-    }
   tend = second();
   All.CPU_TreeConstruction += timediff(tstart, tend);
 
   costtotal = ewaldcount = 0;
 
-
-#if defined(BLACK_HOLES)
-  /* in this case, the number of active particles may have changed 
-   * since NumForceUpdate was computed in run.c due to elimination 
-   * of particles (black hole mergers) in rearrange_particle_sequence() 
-   * Need to recompute NumForceUpdate for this reason.
-   */
-  for(i = 0, NumForceUpdate = 0; i < NumPart; i++)
-    if(P[i].Ti_endstep == All.Ti_Current)
-      NumForceUpdate++;
-#endif
-
-  numlist = (int *) mymalloc(NTask * sizeof(int) * NTask);
+  /* Note: 'NumForceUpdate' has already been determined in find_next_sync_point_and_drift() */
+  numlist = malloc(NTask * sizeof(int) * NTask);
   MPI_Allgather(&NumForceUpdate, 1, MPI_INT, numlist, 1, MPI_INT, MPI_COMM_WORLD);
   for(i = 0, ntot = 0; i < NTask; i++)
     ntot += numlist[i];
-  myfree(numlist);
+  free(numlist);
 
-  if(ntot == 0)
-    return;
 
 #ifndef NOGRAVITY
-#ifndef ISOTHERM
-
-
-  /* Note: 'NumForceUpdate' has been determined in find_next_sync_point_and_drift() */
-
   if(ThisTask == 0)
     printf("Begin tree force.\n");
 
-  noffset = (int *) mymalloc(sizeof(int) * NTask);	/* offsets of bunches in common list */
-  nbuffer = (int *) mymalloc(sizeof(int) * NTask);
-  nsend_local = (int *) mymalloc(sizeof(int) * NTask);
-  nsend = (int *) mymalloc(sizeof(int) * NTask * NTask);
-  ndonelist = (int *) mymalloc(sizeof(int) * NTask);
+
+#ifdef SELECTIVE_NO_GRAVITY
+  for(i = 0; i < NumPart; i++)
+    if(((1 << P[i].Type) & (SELECTIVE_NO_GRAVITY)))
+      P[i].Ti_endstep = -P[i].Ti_endstep - 1;
+#endif
+
+
+  noffset = malloc(sizeof(int) * NTask);	/* offsets of bunches in common list */
+  nbuffer = malloc(sizeof(int) * NTask);
+  nsend_local = malloc(sizeof(int) * NTask);
+  nsend = malloc(sizeof(int) * NTask * NTask);
+  ndonelist = malloc(sizeof(int) * NTask);
 
   i = 0;			/* beginn with this index */
   ntotleft = ntot;		/* particles left for all tasks together */
-
 
   while(ntotleft > 0)
     {
@@ -169,27 +147,16 @@ void gravity_tree(void)
 		    for(k = 0; k < 3; k++)
 		      GravDataGet[nexport].u.Pos[k] = P[i].Pos[k];
 #ifdef UNEQUALSOFTENINGS
-		    GravDataGet[nexport].v.Type = P[i].Type;
+		    GravDataGet[nexport].Type = P[i].Type;
 #ifdef ADAPTIVE_GRAVSOFT_FORGAS
 		    if(P[i].Type == 0)
-		      {
-#ifdef ADAPTIVE_GRAVSOFT_FORGAS_HSML
-			GravDataGet[nexport].Soft = dmin(All.SofteningTable[P[i].Type],ADAPTIVE_GRAVSOFT_FORGAS_HSML * PPP[i].Hsml);
-#else
-			GravDataGet[nexport].Soft =
-			  All.ForceSoftening[0] * pow(P[i].Mass / All.ReferenceGasMass, 1.0 / 3);
-#endif
-		      }
-		    else
-		      GravDataGet[nexport].Soft = All.ForceSoftening[P[i].Type];
+		      GravDataGet[nexport].Soft = SphP[i].Hsml;
 #endif
 #endif
 		    GravDataGet[nexport].w.OldAcc = P[i].OldAcc;
-
 		    GravDataIndexTable[nexport].Task = j;
 		    GravDataIndexTable[nexport].Index = i;
 		    GravDataIndexTable[nexport].SortIndex = nexport;
-
 		    nexport++;
 		    nexportsum++;
 		    nsend_local[j]++;
@@ -270,7 +237,6 @@ void gravity_tree(void)
 	  tend = second();
 	  timetree += timediff(tstart, tend);
 
-
 	  tstart = second();
 	  MPI_Barrier(MPI_COMM_WORLD);
 	  tend = second();
@@ -312,12 +278,9 @@ void gravity_tree(void)
 			  place = GravDataIndexTable[noffset[recvTask] + j].Index;
 
 			  for(k = 0; k < 3; k++)
-			    P[place].g.dGravAccel[k] += GravDataOut[j + noffset[recvTask]].u.Acc[k];
+			    P[place].GravAccel[k] += GravDataOut[j + noffset[recvTask]].u.Acc[k];
 
 			  P[place].GravCost += GravDataOut[j + noffset[recvTask]].w.Ninteractions;
-#ifdef EVALPOTENTIAL
-			  P[place].p.dPotential += GravDataOut[j + noffset[recvTask]].v.Potential;
-#endif
 			}
 		    }
 		}
@@ -337,25 +300,11 @@ void gravity_tree(void)
 	ntotleft -= ndonelist[j];
     }
 
-  myfree(ndonelist);
-  myfree(nsend);
-  myfree(nsend_local);
-  myfree(nbuffer);
-  myfree(noffset);
-
-
-#ifdef FLTROUNDOFFREDUCTION
-  for(i = 0; i < NumPart; i++)
-    if(P[i].Ti_endstep == All.Ti_Current)
-      {
-#ifdef EVALPOTENTIAL
-	P[i].p.Potential = FLT(P[i].p.dPotential);
-#endif
-	for(j = 0; j < 3; j++)
-	  P[i].g.GravAccel[j] = FLT(P[i].g.dGravAccel[j]);
-      }
-#endif
-
+  free(ndonelist);
+  free(nsend);
+  free(nsend_local);
+  free(nbuffer);
+  free(noffset);
 
   /* now add things for comoving integration */
 
@@ -368,7 +317,7 @@ void gravity_tree(void)
       for(i = 0; i < NumPart; i++)
 	if(P[i].Ti_endstep == All.Ti_Current)
 	  for(j = 0; j < 3; j++)
-	    P[i].g.GravAccel[j] += fac * P[i].Pos[j];
+	    P[i].GravAccel[j] += fac * P[i].Pos[j];
     }
 #endif
 #endif
@@ -377,13 +326,13 @@ void gravity_tree(void)
     if(P[i].Ti_endstep == All.Ti_Current)
       {
 #ifdef PMGRID
-	ax = P[i].g.GravAccel[0] + P[i].GravPM[0] / All.G;
-	ay = P[i].g.GravAccel[1] + P[i].GravPM[1] / All.G;
-	az = P[i].g.GravAccel[2] + P[i].GravPM[2] / All.G;
+	ax = P[i].GravAccel[0] + P[i].GravPM[0] / All.G;
+	ay = P[i].GravAccel[1] + P[i].GravPM[1] / All.G;
+	az = P[i].GravAccel[2] + P[i].GravPM[2] / All.G;
 #else
-	ax = P[i].g.GravAccel[0];
-	ay = P[i].g.GravAccel[1];
-	az = P[i].g.GravAccel[2];
+	ax = P[i].GravAccel[0];
+	ay = P[i].GravAccel[1];
+	az = P[i].GravAccel[2];
 #endif
 	P[i].OldAcc = sqrt(ax * ax + ay * ay + az * az);
       }
@@ -395,48 +344,8 @@ void gravity_tree(void)
   /*  muliply by G */
   for(i = 0; i < NumPart; i++)
     if(P[i].Ti_endstep == All.Ti_Current)
-      {
-	for(j = 0; j < 3; j++)
-	  P[i].g.GravAccel[j] *= All.G;
-#ifdef EVALPOTENTIAL
-	/* remove self-potential */
-	P[i].p.Potential += P[i].Mass / All.SofteningTable[P[i].Type];
-
-	if(All.ComovingIntegrationOn)
-	  if(All.PeriodicBoundariesOn)
-	    P[i].p.Potential -= 2.8372975 * pow(P[i].Mass, 2.0 / 3) *
-	      pow(All.Omega0 * 3 * All.Hubble * All.Hubble / (8 * M_PI * All.G), 1.0 / 3);
-
-	P[i].p.Potential *= All.G;
-
-#ifdef PMGRID
-	P[i].p.Potential += P[i].PM_Potential;	/* add in long-range potential */
-#endif
-
-	if(All.ComovingIntegrationOn)
-	  {
-#ifndef PERIODIC
-	    fac = -0.5 * All.Omega0 * All.Hubble * All.Hubble;
-
-	    for(k = 0, r2 = 0; k < 3; k++)
-	      r2 += P[i].Pos[k] * P[i].Pos[k];
-
-	    P[i].p.Potential += fac * r2;
-#endif
-	  }
-	else
-	  {
-	    fac = -0.5 * All.OmegaLambda * All.Hubble * All.Hubble;
-	    if(fac != 0)
-	      {
-		for(k = 0, r2 = 0; k < 3; k++)
-		  r2 += P[i].Pos[k] * P[i].Pos[k];
-
-		P[i].p.Potential += fac * r2;
-	      }
-	  }
-#endif
-      }
+      for(j = 0; j < 3; j++)
+	P[i].GravAccel[j] *= All.G;
 
 
   /* Finally, the following factor allows a computation of a cosmological simulation 
@@ -446,102 +355,46 @@ void gravity_tree(void)
   if(All.ComovingIntegrationOn == 0)
     {
       fac = All.OmegaLambda * All.Hubble * All.Hubble;
-#ifdef DARKENERGY
-      fac *= -0.5 * (1 + 3 * DarkEnergy_t(All.Time));
-#endif
+
       for(i = 0; i < NumPart; i++)
 	if(P[i].Ti_endstep == All.Ti_Current)
 	  for(j = 0; j < 3; j++)
-	    P[i].g.GravAccel[j] += fac * P[i].Pos[j];
+	    P[i].GravAccel[j] += fac * P[i].Pos[j];
     }
 #endif
 #endif
 
-  if(ThisTask == 0)
-    printf("tree is done.\n");
-
-#else /* beginning of ISOTHERM-stuff */
+#ifdef SELECTIVE_NO_GRAVITY
   for(i = 0; i < NumPart; i++)
-    if(P[i].Ti_endstep == All.Ti_Current)
-      {
-	fac = 1 / (P[i].Pos[0] * P[i].Pos[0] + P[i].Pos[1] * P[i].Pos[1] + P[i].Pos[2] * P[i].Pos[2]);
-	for(j = 0; j < 3; j++)
-	  P[i].g.GravAccel[j] = -ISOTHERM * ISOTHERM * P[i].Pos[j] * fac;
-      }
+    if(P[i].Ti_endstep < 0)
+      P[i].Ti_endstep = -P[i].Ti_endstep - 1;
 #endif
 
+  if(ThisTask == 0)
+    printf("tree is done.\n");
 
 #else /* gravity is switched off */
 
   for(i = 0; i < NumPart; i++)
     if(P[i].Ti_endstep == All.Ti_Current)
       for(j = 0; j < 3; j++)
-	P[i].g.GravAccel[j] = 0;
+	P[i].GravAccel[j] = 0;
 
 #endif
 
 
-
-
-
-#ifdef STATICNFW
-  for(i = 0; i < NumPart; i++)
-    if(P[i].Ti_endstep == All.Ti_Current)
-      {
-	r = sqrt(P[i].Pos[0] * P[i].Pos[0] + P[i].Pos[1] * P[i].Pos[1] + P[i].Pos[2] * P[i].Pos[2]);
-	m = enclosed_mass(r);
-#ifdef NFW_DARKFRACTION
-	m *= NFW_DARKFRACTION;
-#endif
-	if(r > 0)
-	  {
-	    for(k = 0; k < 3; k++)
-	      P[i].g.GravAccel[k] += -All.G * m * P[i].Pos[k] / (r * r * r);
-	  }
-      }
-#endif
-
-
-
-#ifdef STATICHQ
-  for(i = 0; i < NumPart; i++)
-    if(P[i].Ti_endstep == All.Ti_Current)
-      {
-	r = sqrt(P[i].Pos[0] * P[i].Pos[0] + P[i].Pos[1] * P[i].Pos[1] + P[i].Pos[2] * P[i].Pos[2]);
-
-	a = pow(All.G * HQ_M200 / (100 * All.Hubble * All.Hubble), 1.0 / 3) / HQ_C *
-	  sqrt(2 * (log(1 + HQ_C) - HQ_C / (1 + HQ_C)));
-
-	m = HQ_M200 * pow(r / (r + a), 2);
-
-#ifdef HQ_DARKFRACTION
-	m *= HQ_DARKFRACTION;
-#endif
-	if(r > 0)
-	  {
-	    for(k = 0; k < 3; k++)
-	      P[i].g.GravAccel[k] += -All.G * m * P[i].Pos[k] / (r * r * r);
-	  }
-      }
-#endif
 
 
   /* Now the force computation is finished */
 
   /*  gather some diagnostic information */
 
-  CPU_Step[CPU_TREEWALK] += timetree;
-  CPU_Step[CPU_GRAVCOMM] += timecommsumm;
-
-  All.Cadj_Cpu += timetree;
-
-
-  timetreelist = (double *) mymalloc(sizeof(double) * NTask);
-  timecommlist = (double *) mymalloc(sizeof(double) * NTask);
-  costtreelist = (double *) mymalloc(sizeof(double) * NTask);
-  numnodeslist = (int *) mymalloc(sizeof(int) * NTask);
-  ewaldlist = (double *) mymalloc(sizeof(double) * NTask);
-  nrecv = (int *) mymalloc(sizeof(int) * NTask);
+  timetreelist = malloc(sizeof(double) * NTask);
+  timecommlist = malloc(sizeof(double) * NTask);
+  costtreelist = malloc(sizeof(double) * NTask);
+  numnodeslist = malloc(sizeof(int) * NTask);
+  ewaldlist = malloc(sizeof(double) * NTask);
+  nrecv = malloc(sizeof(int) * NTask);
 
   numnodes = Numnodestree;
 
@@ -588,8 +441,6 @@ void gravity_tree(void)
 
 	  ewaldtot += ewaldlist[i];
 	}
-
-#ifndef NOGRAVITY
       fprintf(FdTimings, "work-load balance: %g  max=%g avg=%g PE0=%g\n",
 	      maxt / (sumt / NTask), maxt, sumt / NTask, timetreelist[0]);
       fprintf(FdTimings, "particle-load balance: %g\n", plb_max);
@@ -600,29 +451,28 @@ void gravity_tree(void)
       fprintf(FdTimings, "\n");
 
       fflush(FdTimings);
-#endif
 
       All.CPU_TreeWalk += sumt / NTask;
       All.CPU_Imbalance += sumimbalance / NTask;
       All.CPU_CommSum += sumcomm / NTask;
     }
 
-  myfree(nrecv);
-  myfree(ewaldlist);
-  myfree(numnodeslist);
-  myfree(costtreelist);
-  myfree(timecommlist);
-  myfree(timetreelist);
-//Added by JM
-  external_potential();
+  free(nrecv);
+  free(ewaldlist);
+  free(numnodeslist);
+  free(costtreelist);
+  free(timecommlist);
+  free(timetreelist);
+//Added by JM:
+  jm_potential();
 //End of Added by JM
 }
 
 //Added by JM:
-void external_potential(void){
-#ifdef MYSWITCH
-  int i;
-  float my_r, my_x, my_y, my_z, my_Mhere ,my_common_factor;
+void jm_potential(void){
+  int i;	
+  //float my_r, my_x, my_y, my_z, my_Mhere ,my_common_factor;
+  float my_r, my_x, my_y, my_z, my_radical ,my_common_factor;
   for(i = 0; i < NumPart; i++){
     if(P[i].Ti_endstep == All.Ti_Current)
       {
@@ -630,65 +480,62 @@ void external_potential(void){
        	 my_y = P[i].Pos[1];
       	 my_z = P[i].Pos[2];
       	 my_r = sqrt( my_x*my_x + my_y*my_y + my_z*my_z ) ;
-         /*Plummer Potential
+         /*Plummer Potential*/
          my_radical = pow( 1.0 + pow(my_r,2.0)*pow(a_plumm,-2.0) , -3.0/2.0 );
-         my_common_factor = All.G * M_tot * pow( a_plumm,-3.0) * my_radical;
-         End of Plummer Potential*/
-          /*Isothermal Potential*/
-          if( my_r < my_rcore  ) my_Mhere = my_Mbh + my_Mcore * pow( my_r/my_rcore,3. );
-          if( my_r >= my_rcore ) my_Mhere = my_Mbh + my_Ma * (my_r/my_a);
-          my_common_factor = All.G * my_Mhere * pow(my_r,-3.0);
-          /*End of Isothermal Potential*/
-          /*Give acceleration to the particle*/
-          P[i].g.GravAccel[0] += 0.0 - my_common_factor * my_x;
-          P[i].g.GravAccel[1] += 0.0 - my_common_factor * my_y;
-          P[i].g.GravAccel[2] += 0.0 - my_common_factor * my_z;
-         }
+         my_common_factor = All.G * M_plumm * pow( a_plumm,-3.0) * my_radical;
+         /*End of Plummer Potential*/
+         /*Isothermal Potential*/
+         //if( my_r < my_rcore  ) my_Mhere = my_Mbh + my_Mcore * pow( my_r/my_rcore,3. );
+         //if( my_r >= my_rcore ) my_Mhere = my_Mbh + my_Ma * (my_r/my_a);
+         //my_common_factor = All.G * my_Mhere * pow(my_r,-3.0);
+         /*End of Isothermal Potential*/
+		 /*Keplerian Potential*/
+         //my_common_factor = All.G * my_Mbh * pow(my_r,-3.0);
+		 /*End of Keplerian Potential*/
+         /*Give acceleration to the particle*/
+         P[i].GravAccel[0] += 0.0 - my_common_factor * my_x;
+         P[i].GravAccel[1] += 0.0 - my_common_factor * my_y;
+         P[i].GravAccel[2] += 0.0 - my_common_factor * my_z;
       }
-#endif
+  }
 }
 //END of Added by JM
 
 
-/*!  This function sets the (comoving) softening length of all particle types
- *  in the table All.SofteningTable[...].  We check that the physical softening
- *  length is bounded by the Softening-MaxPhys values.
+
+/*! This function sets the (comoving) softening length of all particle
+ *  types in the table All.SofteningTable[...].  We check that the physical
+ *  softening length is bounded by the Softening-MaxPhys values.
  */
 void set_softenings(void)
 {
   int i;
 
-  if(All.ComovingIntegrationOn)
-    {
-      if(All.SofteningGas * All.Time > All.SofteningGasMaxPhys)
-	All.SofteningTable[0] = All.SofteningGasMaxPhys / All.Time;
-      else
-	All.SofteningTable[0] = All.SofteningGas;
-
+  if(All.ComovingIntegrationOn) { if(All.SofteningGas * All.Time > All.SofteningGasMaxPhys) All.SofteningTable[0] = All.SofteningGasMaxPhys / All.Time; else All.SofteningTable[0] = All.SofteningGas; 
       if(All.SofteningHalo * All.Time > All.SofteningHaloMaxPhys)
-	All.SofteningTable[1] = All.SofteningHaloMaxPhys / All.Time;
+        All.SofteningTable[1] = All.SofteningHaloMaxPhys / All.Time;
       else
-	All.SofteningTable[1] = All.SofteningHalo;
-
+        All.SofteningTable[1] = All.SofteningHalo;
+      
       if(All.SofteningDisk * All.Time > All.SofteningDiskMaxPhys)
-	All.SofteningTable[2] = All.SofteningDiskMaxPhys / All.Time;
+        All.SofteningTable[2] = All.SofteningDiskMaxPhys / All.Time;
       else
-	All.SofteningTable[2] = All.SofteningDisk;
-
+        All.SofteningTable[2] = All.SofteningDisk;
+      
       if(All.SofteningBulge * All.Time > All.SofteningBulgeMaxPhys)
-	All.SofteningTable[3] = All.SofteningBulgeMaxPhys / All.Time;
+        All.SofteningTable[3] = All.SofteningBulgeMaxPhys / All.Time;
       else
-	All.SofteningTable[3] = All.SofteningBulge;
-
+        All.SofteningTable[3] = All.SofteningBulge;
+      
       if(All.SofteningStars * All.Time > All.SofteningStarsMaxPhys)
-	All.SofteningTable[4] = All.SofteningStarsMaxPhys / All.Time;
+        All.SofteningTable[4] = All.SofteningStarsMaxPhys / All.Time;
       else
-	All.SofteningTable[4] = All.SofteningStars;
-
+        All.SofteningTable[4] = All.SofteningStars;
+      
       if(All.SofteningBndry * All.Time > All.SofteningBndryMaxPhys)
-	All.SofteningTable[5] = All.SofteningBndryMaxPhys / All.Time;
+        All.SofteningTable[5] = All.SofteningBndryMaxPhys / All.Time;
       else
-	All.SofteningTable[5] = All.SofteningBndry;
+        All.SofteningTable[5] = All.SofteningBndry;
     }
   else
     {
@@ -706,9 +553,10 @@ void set_softenings(void)
   All.MinGasHsml = All.MinGasHsmlFractional * All.ForceSoftening[0];
 }
 
-/*! This function is used as a comparison kernel in a sort routine, which is
- *  the method used to group particles that are going to the same CPU in the
- *  communication buffer.
+
+/*! This function is used as a comparison kernel in a sort routine. It is
+ *  used to group particles in the communication buffer that are going to
+ *  be sent to the same CPU.
  */
 int grav_tree_compare_key(const void *a, const void *b)
 {

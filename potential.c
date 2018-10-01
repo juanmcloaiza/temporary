@@ -10,10 +10,14 @@
 #include "proto.h"
 
 
-#if defined(COMPUTE_POTENTIAL_ENERGY) || defined(OUTPUTPOTENTIAL)
+/*! \file potential.c 
+ *  \brief Computation of the gravitational potential of particles
+ */
 
-/* This function computes the gravitational potential for ALL the particles.
- * It expects that the particles are predicted to the current time.
+
+/*! This function computes the gravitational potential for ALL the particles.
+ *  First, the (short-range) tree potential is computed, and then, if needed,
+ *  the long range PM potential is added.
  */
 void compute_potential(void)
 {
@@ -30,6 +34,8 @@ void compute_potential(void)
   MPI_Status status;
   double r2;
 
+  t0 = second();
+
   if(All.ComovingIntegrationOn)
     set_softenings();
 
@@ -39,26 +45,13 @@ void compute_potential(void)
       fflush(stdout);
     }
 
-#ifdef ISOTHERM
-  for(i = 0; i < NumPart; i++)
-    {
-      for(k = 0, r2 = 0; k < 3; k++)
-	r2 += P[i].Pos[k] * P[i].Pos[k];
-
-      P[i].p.Potential = -2 * ISOTHERM * ISOTHERM * (1 + log(ISOTHERM / sqrt(r2)));
-    }
-  return;
-#endif
-
 
   tstart = second();
   if(TreeReconstructFlag)
     {
       if(ThisTask == 0)
 	printf("Tree construction.\n");
-#if defined(SFR) || defined(BLACK_HOLES) || defined(MYSWITCH)
-      rearrange_particle_sequence();
-#endif
+
       force_treebuild(NumPart);
 
       TreeReconstructFlag = 0;
@@ -68,22 +61,18 @@ void compute_potential(void)
     }
   tend = second();
   All.CPU_TreeConstruction += timediff(tstart, tend);
-  CPU_Step[CPU_TREEBUILD] += timediff(tstart, tend);
 
-
-  t0 = second();
-
-  numlist = (int *) mymalloc(NTask * sizeof(int) * NTask);
+  numlist = malloc(NTask * sizeof(int) * NTask);
   MPI_Allgather(&NumPart, 1, MPI_INT, numlist, 1, MPI_INT, MPI_COMM_WORLD);
   for(i = 0, ntot = 0; i < NTask; i++)
     ntot += numlist[i];
-  myfree(numlist);
+  free(numlist);
 
-  noffset = (int *) mymalloc(sizeof(int) * NTask);	/* offsets of bunches in common list */
-  nbuffer = (int *) mymalloc(sizeof(int) * NTask);
-  nsend_local = (int *) mymalloc(sizeof(int) * NTask);
-  nsend = (int *) mymalloc(sizeof(int) * NTask * NTask);
-  ndonelist = (int *) mymalloc(sizeof(int) * NTask);
+  noffset = malloc(sizeof(int) * NTask);	/* offsets of bunches in common list */
+  nbuffer = malloc(sizeof(int) * NTask);
+  nsend_local = malloc(sizeof(int) * NTask);
+  nsend = malloc(sizeof(int) * NTask * NTask);
+  ndonelist = malloc(sizeof(int) * NTask);
 
   i = 0;			/* beginn with this index */
   ntotleft = ntot;		/* particles left for all tasks together */
@@ -114,19 +103,10 @@ void compute_potential(void)
 		  for(k = 0; k < 3; k++)
 		    GravDataGet[nexport].u.Pos[k] = P[i].Pos[k];
 #ifdef UNEQUALSOFTENINGS
-		  GravDataGet[nexport].v.Type = P[i].Type;
+		  GravDataGet[nexport].Type = P[i].Type;
 #ifdef ADAPTIVE_GRAVSOFT_FORGAS
-		  if(P[i].Type == 0)
-		    {
-#ifdef ADAPTIVE_GRAVSOFT_FORGAS_HSML
-		      GravDataGet[nexport].Soft = dmin(All.SofteningTable[P[i].Type],ADAPTIVE_GRAVSOFT_FORGAS_HSML * PPP[i].Hsml);
-#else
-		      GravDataGet[nexport].Soft =
-			All.ForceSoftening[0] * pow(P[i].Mass / All.ReferenceGasMass, 1.0 / 3);
-#endif
-		    }
-		  else
-		    GravDataGet[nexport].Soft = All.ForceSoftening[P[i].Type];
+                  if(P[i].Type == 0)
+                    GravDataGet[nexport].Soft = SphP[i].Hsml;
 #endif
 #endif
 		  GravDataGet[nexport].w.OldAcc = P[i].OldAcc;
@@ -236,7 +216,7 @@ void compute_potential(void)
 			{
 			  place = GravDataIndexTable[noffset[recvTask] + j].Index;
 
-			  P[place].p.dPotential += GravDataOut[j + noffset[recvTask]].v.Potential;
+			  P[place].Potential += GravDataOut[j + noffset[recvTask]].u.Potential;
 			}
 		    }
 		}
@@ -254,27 +234,23 @@ void compute_potential(void)
 	ntotleft -= ndonelist[j];
     }
 
-  myfree(ndonelist);
-  myfree(nsend);
-  myfree(nsend_local);
-  myfree(nbuffer);
-  myfree(noffset);
+  free(ndonelist);
+  free(nsend);
+  free(nsend_local);
+  free(nbuffer);
+  free(noffset);
 
 
   /* add correction to exclude self-potential */
 
   for(i = 0; i < NumPart; i++)
     {
-#ifdef FLTROUNDOFFREDUCTION
-      P[i].p.Potential = FLT(P[i].p.dPotential);
-#endif
-
       /* remove self-potential */
-      P[i].p.Potential += P[i].Mass / All.SofteningTable[P[i].Type];
+      P[i].Potential += P[i].Mass / All.SofteningTable[P[i].Type];
 
       if(All.ComovingIntegrationOn)
 	if(All.PeriodicBoundariesOn)
-	  P[i].p.Potential -= 2.8372975 * pow(P[i].Mass, 2.0 / 3) *
+	  P[i].Potential -= 2.8372975 * pow(P[i].Mass, 2.0 / 3) *
 	    pow(All.Omega0 * 3 * All.Hubble * All.Hubble / (8 * M_PI * All.G), 1.0 / 3);
     }
 
@@ -282,7 +258,7 @@ void compute_potential(void)
   /* multiply with the gravitational constant */
 
   for(i = 0; i < NumPart; i++)
-    P[i].p.Potential *= All.G;
+    P[i].Potential *= All.G;
 
 
 #ifdef PMGRID
@@ -291,7 +267,7 @@ void compute_potential(void)
   pmpotential_periodic();
 #ifdef PLACEHIGHRESREGION
   i = pmpotential_nonperiodic(1);
-  if(i == 1)			/* this is returned if a particle lied outside allowed range */
+  if(i == 1)  /* this is returned if a particle lied outside allowed range */
     {
       pm_init_regionsize();
       pm_setup_nonperiodic_kernel();
@@ -311,7 +287,7 @@ void compute_potential(void)
   if(i == 1)
     endrun(88687);
 #ifdef PLACEHIGHRESREGION
-      i = pmpotential_nonperiodic(1);
+  i = pmpotential_nonperiodic(1);
   if(i == 1)			/* this is returned if a particle lied outside allowed range */
     {
       pm_init_regionsize();
@@ -337,7 +313,7 @@ void compute_potential(void)
 	  for(k = 0, r2 = 0; k < 3; k++)
 	    r2 += P[i].Pos[k] * P[i].Pos[k];
 
-	  P[i].p.Potential += fac * r2;
+	  P[i].Potential += fac * r2;
 	}
 #endif
     }
@@ -351,7 +327,7 @@ void compute_potential(void)
 	      for(k = 0, r2 = 0; k < 3; k++)
 		r2 += P[i].Pos[k] * P[i].Pos[k];
 
-	      P[i].p.Potential += fac * r2;
+	      P[i].Potential += fac * r2;
 	    }
 	}
     }
@@ -372,5 +348,3 @@ void compute_potential(void)
     P[i].Potential = 0;
 #endif
 }
-
-#endif

@@ -14,7 +14,7 @@
 
 #ifdef PMGRID
 
-/*! Driver routine to call initializiation of periodic or/and non-periodic FFT
+/*! Calls initializiation routines of periodic or/and non-periodic FFT
  *  routines.
  */
 void long_range_init(void)
@@ -30,6 +30,9 @@ void long_range_init(void)
 }
 
 
+/*! This function calls subroutines that determine the spatial region covered
+ *  by the PM mesh.
+ */
 void long_range_init_regionsize(void)
 {
 #ifdef PERIODIC
@@ -46,7 +49,9 @@ void long_range_init_regionsize(void)
 }
 
 
-/*! This function computes the long-range PM force for all particles.
+/*! This function is a driver routine for the long-range PM force
+ *  computation. It calls periodic and/or non-periodic FFT routines as needed
+ *  for the present simulation set-up.
  */
 void long_range_force(void)
 {
@@ -59,12 +64,7 @@ void long_range_force(void)
 
 
   for(i = 0; i < NumPart; i++)
-    {
-      P[i].GravPM[0] = P[i].GravPM[1] = P[i].GravPM[2] = 0;
-#ifdef EVALPOTENTIAL
-      P[i].PM_Potential = 0;
-#endif
-    }
+    P[i].GravPM[0] = P[i].GravPM[1] = P[i].GravPM[2] = 0;
 
 #ifdef NOGRAVITY
   return;
@@ -75,7 +75,6 @@ void long_range_force(void)
   pmforce_periodic();
 #ifdef PLACEHIGHRESREGION
   i = pmforce_nonperiodic(1);
-#ifdef SYNCHRONIZATION
   if(i == 1)			/* this is returned if a particle lied outside allowed range */
     {
       pm_init_regionsize();
@@ -85,22 +84,18 @@ void long_range_force(void)
   if(i == 1)
     endrun(68686);
 #endif
-#endif
 #else
   i = pmforce_nonperiodic(0);
-#ifdef SYNCHRONIZATION
   if(i == 1)			/* this is returned if a particle lied outside allowed range */
     {
       pm_init_regionsize();
       pm_setup_nonperiodic_kernel();
       i = pmforce_nonperiodic(0);	/* try again */
     }
-#endif
   if(i == 1)
     endrun(68687);
 #ifdef PLACEHIGHRESREGION
   i = pmforce_nonperiodic(1);
-#ifdef SYNCHRONIZATION
   if(i == 1)			/* this is returned if a particle lied outside allowed range */
     {
       pm_init_regionsize();
@@ -113,7 +108,6 @@ void long_range_force(void)
 
       i = pmforce_nonperiodic(0) + pmforce_nonperiodic(1);
     }
-#endif
   if(i != 0)
     endrun(68688);
 #endif

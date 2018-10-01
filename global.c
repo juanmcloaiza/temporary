@@ -8,12 +8,16 @@
 #include "proto.h"
 
 
+/*! \file global.c
+ *  \brief Computes global physical properties of the system
+ */
 
-/* This routine computes various global properties of the particle
- * distribution and stores the result in the struct `SysState'.
- * Currently, not all the information that's computed here is 
- * actually used (e.g. momentum is not really used anywhere),
- * just the energies are written to a log-file every once in a while.
+
+/*! This routine computes various global properties of the particle
+ *  distribution and stores the result in the struct `SysState'.
+ *  Currently, not all the information that's computed here is actually
+ *  used (e.g. momentum is not really used anywhere), just the energies are
+ *  written to a log-file every once in a while.
  */
 void compute_global_quantities_of_system(void)
 {
@@ -49,7 +53,7 @@ void compute_global_quantities_of_system(void)
     {
       sys.MassComp[P[i].Type] += P[i].Mass;
 
-      sys.EnergyPotComp[P[i].Type] += 0.5 * P[i].Mass * P[i].p.Potential / a1;
+      sys.EnergyPotComp[P[i].Type] += 0.5 * P[i].Mass * P[i].Potential / a1;
 
       if(All.ComovingIntegrationOn)
 	{
@@ -65,15 +69,14 @@ void compute_global_quantities_of_system(void)
 
       for(j = 0; j < 3; j++)
 	{
-	  vel[j] = P[i].Vel[j] + P[i].g.GravAccel[j] * dt_gravkick;
+	  vel[j] = P[i].Vel[j] + P[i].GravAccel[j] * dt_gravkick;
 	  if(P[i].Type == 0)
-	    vel[j] += SphP[i].a.HydroAccel[j] * dt_hydrokick;
+	    vel[j] += SphP[i].HydroAccel[j] * dt_hydrokick;
 	}
       if(P[i].Type == 0)
-	entr = SphP[i].Entropy + SphP[i].e.DtEntropy * dt_entr;
+	entr = SphP[i].Entropy + SphP[i].DtEntropy * dt_entr;
 
 #ifdef PMGRID
-
       if(All.ComovingIntegrationOn)
 	dt_gravkick = get_gravkick_factor(All.PM_Ti_begstep, All.Ti_Current) -
 	  get_gravkick_factor(All.PM_Ti_begstep, (All.PM_Ti_begstep + All.PM_Ti_endstep) / 2);
@@ -92,7 +95,7 @@ void compute_global_quantities_of_system(void)
 #ifdef ISOTHERM_EQS
           egyspec = entr;
 #else
-	  egyspec = entr / (GAMMA_MINUS1) * pow(SphP[i].a2.Density / a3, GAMMA_MINUS1);
+	  egyspec = entr / (GAMMA_MINUS1) * pow(SphP[i].Density / a3, GAMMA_MINUS1);
 #endif
 	  sys.EnergyIntComp[0] += P[i].Mass * egyspec;
 	}

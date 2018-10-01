@@ -9,15 +9,22 @@
 #include "proto.h"
 
 
-
-/*  This function computes the gravitational forces for all active particles.
- *  A new tree is constructed, if the number of force computations since
- *  it's last construction exceeds some fraction of the total
- *  particle number, otherwise tree nodes are dynamically updated if needed.
+/*! \file gravtree_forcetest.c 
+ *  \brief routines for direct summation forces
+ *
+ *  The code in this file allows to compute checks of the force accuracy by
+ *  an independent direct summation computation.  To this end, one can
+ *  instruct GADGET in the Makefile to coompute direct summation forces for
+ *  a certain random subfraction of particles.
  */
+
+
 
 #ifdef FORCETEST
 
+/*! This routine does the test of the gravitational tree force by computing
+ *  the force for a random subset of particles with direct summation.
+ */
 void gravity_forcetest(void)
 {
   int ntot, iter = 0, ntotleft, nthis;
@@ -62,10 +69,10 @@ void gravity_forcetest(void)
 
   costtotal = 0;
 
-  noffset = mymalloc(sizeof(int) * NTask);	/* offsets of bunches in common list */
-  nbuffer = mymalloc(sizeof(int) * NTask);
-  nsend_local = mymalloc(sizeof(int) * NTask);
-  nsend = mymalloc(sizeof(int) * NTask * NTask);
+  noffset = malloc(sizeof(int) * NTask);	/* offsets of bunches in common list */
+  nbuffer = malloc(sizeof(int) * NTask);
+  nsend_local = malloc(sizeof(int) * NTask);
+  nsend = malloc(sizeof(int) * NTask * NTask);
 
   i = 0;			/* beginn with this index */
   ntotleft = ntot;		/* particles left for all tasks together */
@@ -97,7 +104,9 @@ void gravity_forcetest(void)
 		    for(k = 0; k < 3; k++)
 		      GravDataGet[nexport].u.Pos[k] = P[i].Pos[k];
 
-		    GravDataGet[nexport].v.Type = P[i].Type;
+#ifdef UNEQUALSOFTENINGS
+		    GravDataGet[nexport].Type = P[i].Type;
+#endif
 		    GravDataGet[nexport].w.OldAcc = P[i].OldAcc;
 
 		    GravDataIndexTable[nexport].Task = j;
@@ -224,10 +233,10 @@ void gravity_forcetest(void)
       ntotleft -= ndonetot;
     }
 
-  myfree(nsend);
-  myfree(nsend_local);
-  myfree(nbuffer);
-  myfree(noffset);
+  free(nsend);
+  free(nsend_local);
+  free(nbuffer);
+  free(noffset);
 
 
   /* now add things for comoving integration */
@@ -288,15 +297,15 @@ void gravity_forcetest(void)
 			P[i].Type, All.Time, All.Time - TimeOfLastTreeConstruction,
 			P[i].Pos[0], P[i].Pos[1], P[i].Pos[2],
 			P[i].GravAccelDirect[0], P[i].GravAccelDirect[1], P[i].GravAccelDirect[2],
-			P[i].g.GravAccel[0], P[i].g.GravAccel[1], P[i].g.GravAccel[2]);
+			P[i].GravAccel[0], P[i].GravAccel[1], P[i].GravAccel[2]);
 #else
 		fprintf(FdForceTest, "%d %g %g %g %g %g %g %g %g %g %g %g %g %g %g\n",
 			P[i].Type, All.Time, All.Time - TimeOfLastTreeConstruction,
 			P[i].Pos[0], P[i].Pos[1], P[i].Pos[2],
 			P[i].GravAccelDirect[0], P[i].GravAccelDirect[1], P[i].GravAccelDirect[2],
-			P[i].g.GravAccel[0], P[i].g.GravAccel[1], P[i].g.GravAccel[2],
-			P[i].GravPM[0] + P[i].g.GravAccel[0],
-			P[i].GravPM[1] + P[i].g.GravAccel[1], P[i].GravPM[2] + P[i].g.GravAccel[2]);
+			P[i].GravAccel[0], P[i].GravAccel[1], P[i].GravAccel[2],
+			P[i].GravPM[0] + P[i].GravAccel[0],
+			P[i].GravPM[1] + P[i].GravAccel[1], P[i].GravPM[2] + P[i].GravAccel[2]);
 #endif
 	      }
 	  fclose(FdForceTest);
@@ -312,8 +321,8 @@ void gravity_forcetest(void)
 
 
 
-  timetreelist = mymalloc(sizeof(double) * NTask);
-  costtreelist = mymalloc(sizeof(double) * NTask);
+  timetreelist = malloc(sizeof(double) * NTask);
+  costtreelist = malloc(sizeof(double) * NTask);
 
   MPI_Gather(&costtotal, 1, MPI_DOUBLE, costtreelist, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
   MPI_Gather(&timetree, 1, MPI_DOUBLE, timetreelist, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
@@ -338,8 +347,8 @@ void gravity_forcetest(void)
       fflush(FdTimings);
     }
 
-  myfree(costtreelist);
-  myfree(timetreelist);
+  free(costtreelist);
+  free(timetreelist);
 }
 
 #endif
