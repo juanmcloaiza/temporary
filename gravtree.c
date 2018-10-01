@@ -6,18 +6,7 @@
 
 #include "allvars.h"
 #include "proto.h"
-//Added by JM:
-//Check code units
-#define M_DISC 33.0
-#define R_DISC 30.0
-#define a_plumm 0.5*R_DISC
-#define M_plumm 7.0*M_DISC
-//#define my_a 1.0
-//#define my_Ma 1.0
-//#define my_Mbh 0.0e-2
-//#define my_Mcore 2.0e-2
-//#define my_rcore 2.0e-2
-//END of Added by JM
+
 /*! \file gravtree.c 
  *  \brief main driver routines for gravitational (short-range) force computation
  *
@@ -56,16 +45,7 @@ void gravity_tree(void)
   double ax, ay, az;
   MPI_Status status;
 #endif
-//Added by JM
-  for(i = 0, NumForceUpdate = 0; i < NumPart; i++)
-  {
-    if(P[i].Ti_endstep == All.Ti_Current)
-#ifdef SELECTIVE_NO_GRAVITY
-      if(!((1 << P[i].Type) & (SELECTIVE_NO_GRAVITY)))
-#endif
-        NumForceUpdate++;
-  } 
-//End of Added by JM
+
   /* set new softening lengths */
   if(All.ComovingIntegrationOn)
     set_softenings();
@@ -463,43 +443,7 @@ void gravity_tree(void)
   free(costtreelist);
   free(timecommlist);
   free(timetreelist);
-//Added by JM:
-  jm_potential();
-//End of Added by JM
 }
-
-//Added by JM:
-void jm_potential(void){
-  int i;	
-  //float my_r, my_x, my_y, my_z, my_Mhere ,my_common_factor;
-  float my_r, my_x, my_y, my_z, my_radical ,my_common_factor;
-  for(i = 0; i < NumPart; i++){
-    if(P[i].Ti_endstep == All.Ti_Current)
-      {
-         my_x = P[i].Pos[0];
-       	 my_y = P[i].Pos[1];
-      	 my_z = P[i].Pos[2];
-      	 my_r = sqrt( my_x*my_x + my_y*my_y + my_z*my_z ) ;
-         /*Plummer Potential*/
-         my_radical = pow( 1.0 + pow(my_r,2.0)*pow(a_plumm,-2.0) , -3.0/2.0 );
-         my_common_factor = All.G * M_plumm * pow( a_plumm,-3.0) * my_radical;
-         /*End of Plummer Potential*/
-         /*Isothermal Potential*/
-         //if( my_r < my_rcore  ) my_Mhere = my_Mbh + my_Mcore * pow( my_r/my_rcore,3. );
-         //if( my_r >= my_rcore ) my_Mhere = my_Mbh + my_Ma * (my_r/my_a);
-         //my_common_factor = All.G * my_Mhere * pow(my_r,-3.0);
-         /*End of Isothermal Potential*/
-		 /*Keplerian Potential*/
-         //my_common_factor = All.G * my_Mbh * pow(my_r,-3.0);
-		 /*End of Keplerian Potential*/
-         /*Give acceleration to the particle*/
-         P[i].GravAccel[0] += 0.0 - my_common_factor * my_x;
-         P[i].GravAccel[1] += 0.0 - my_common_factor * my_y;
-         P[i].GravAccel[2] += 0.0 - my_common_factor * my_z;
-      }
-  }
-}
-//END of Added by JM
 
 
 
@@ -511,7 +455,13 @@ void set_softenings(void)
 {
   int i;
 
-  if(All.ComovingIntegrationOn) { if(All.SofteningGas * All.Time > All.SofteningGasMaxPhys) All.SofteningTable[0] = All.SofteningGasMaxPhys / All.Time; else All.SofteningTable[0] = All.SofteningGas; 
+  if(All.ComovingIntegrationOn)
+    {
+      if(All.SofteningGas * All.Time > All.SofteningGasMaxPhys)
+        All.SofteningTable[0] = All.SofteningGasMaxPhys / All.Time;
+      else
+        All.SofteningTable[0] = All.SofteningGas;
+      
       if(All.SofteningHalo * All.Time > All.SofteningHaloMaxPhys)
         All.SofteningTable[1] = All.SofteningHaloMaxPhys / All.Time;
       else

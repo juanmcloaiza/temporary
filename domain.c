@@ -140,9 +140,7 @@ void domain_Decomposition(void)
       free(KeySorted);
       free(Key);
     }
-//Added by JM
-N0 = NumPart;
-//End of Added by JM
+
 }
 
 

@@ -207,15 +207,6 @@ void open_outputfiles(void)
     strcpy(mode, "w");
   else
     strcpy(mode, "a");
-//Added by JM
-  char my_filename[200] = "Accretion.txt";
-  sprintf(buf, "%s%s", All.OutputDir,my_filename);
-  if(!(FdAccretion = fopen(buf, mode)))
-  {
-    printf("error in opening file '%s'\n", buf);
-    endrun(1);
-  }
-//End of Added by JM
 
 
   sprintf(buf, "%s%s", All.OutputDir, All.CpuFile);
@@ -267,9 +258,7 @@ void close_outputfiles(void)
 {
   if(ThisTask != 0)		/* only the root processor writes to the log files */
     return;
-//Added by JM
-  fclose(FdAccretion);
-//End of added by JM
+
   fclose(FdCPU);
   fclose(FdInfo);
   fclose(FdEnergy);

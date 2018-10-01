@@ -9,7 +9,7 @@
 
 
 #--------------------------------------- Basic operation mode of code
-#OPT   +=  -DPERIODIC 
+OPT   +=  -DPERIODIC 
 OPT   +=  -DUNEQUALSOFTENINGS
 
 
@@ -19,7 +19,7 @@ OPT   +=  -DWALLCLOCK
 
 
 #--------------------------------------- TreePM Options
-#OPT   +=  -DPMGRID=128
+OPT   +=  -DPMGRID=128
 #OPT   +=  -DPLACEHIGHRESREGION=3
 #OPT   +=  -DENLARGEREGION=1.2
 #OPT   +=  -DASMTH=1.25
@@ -32,7 +32,7 @@ OPT   +=  -DWALLCLOCK
 
 
 #--------------------------------------- Time integration options
-#OPT   +=  -DSYNCHRONIZATION
+OPT   +=  -DSYNCHRONIZATION
 #OPT   +=  -DFLEXSTEPS
 #OPT   +=  -DPSEUDOSYMMETRIC
 #OPT   +=  -DNOSTOP_WHEN_BELOW_MINTIMESTEP
@@ -40,7 +40,7 @@ OPT   +=  -DWALLCLOCK
 
 
 #--------------------------------------- Output 
-#OPT   +=  -DHAVE_HDF5  
+OPT   +=  -DHAVE_HDF5  
 #OPT   +=  -DOUTPUTPOTENTIAL
 #OPT   +=  -DOUTPUTACCELERATION
 #OPT   +=  -DOUTPUTCHANGEOFENTROPY
@@ -60,7 +60,7 @@ OPT   +=  -DWALLCLOCK
 #OPT   +=  -DCOMPUTE_POTENTIAL_ENERGY
 #OPT   +=  -DLONGIDS
 #OPT   +=  -DISOTHERM_EQS
-OPT   +=  -DADAPTIVE_GRAVSOFT_FORGAS
+#OPT   +=  -DADAPTIVE_GRAVSOFT_FORGAS
 #OPT   +=  -DSELECTIVE_NO_GRAVITY=2+4+8+16
 
 #--------------------------------------- Testing and Debugging options
@@ -68,7 +68,7 @@ OPT   +=  -DADAPTIVE_GRAVSOFT_FORGAS
 
 
 #--------------------------------------- Glass making
-#OPT   +=  -DMAKEGLASS=7880599
+#OPT   +=  -DMAKEGLASS=262144
 
 
 #----------------------------------------------------------------------
@@ -80,16 +80,13 @@ OPT   +=  -DADAPTIVE_GRAVSOFT_FORGAS
 #--------------------------------------- Select some defaults
 
 CC       =  mpicc               # sets the C-compiler
-OPTIMIZE =  -g -qcpluscmt -qsuppress=1501-245 *.c -O2 -Wall # sets optimization and warning flags
-#MPICHLIB =  -lmpich
+OPTIMIZE =  -O2 -Wall -g        # sets optimization and warning flags
+MPICHLIB =  -lmpich
 
 
 #--------------------------------------- Select target computer
-SYSTYPE="PLX"
-#SYSTYPE="FERMI"
-#SYSTYPE="Dirac"
-#SYSTYPE="HG1"
-#SYSTYPE="MPA"
+
+SYSTYPE="MPA"
 #SYSTYPE="Mako"
 #SYSTYPE="Regatta"
 #SYSTYPE="RZG_LinuxCluster"
@@ -100,55 +97,6 @@ SYSTYPE="PLX"
 
 
 #--------------------------------------- Adjust settings for target computer
-
-ifeq ($(SYSTYPE),"PLX")
-CC       =  mpicc   
-OPTIMIZE =  -Wall -no-multibyte-chars -g 
-GSL_INCL = -I$(GSL_INCLUDE)
-GSL_LIBS = -L$(GSL_LIB)
-FFTW_INCL= -I$(FFTW_INCLUDE)
-FFTW_LIBS= -L$(FFTW_LIB)
-#MPICHLIB =
-endif
-
-ifeq ($(SYSTYPE),"FERMI")
-CC       =  mpixlc_r
-OPTIMIZE =  -g -O2 -qarch=qp -qtune=qp #-qcpluscmt -qsuppress=1501-245 *.c
-GSL_INCL =  -I/cineca/prod/libraries/gsl/1.15/bgq-xl--1.0/include 
-GSL_LIBS =  -L/cineca/prod/libraries/gsl/1.15/bgq-xl--1.0/lib 
-FFTW_INCL=  -I/cineca/prod/libraries/fftw/2.1.5/bgq-xl--1.0/include
-FFTW_LIBS=  -L/cineca/prod/libraries/fftw/2.1.5/bgq-xl--1.0/lib
-MPICHLIB = 
-endif
-
-
-ifeq ($(SYSTYPE),"CINECASP6")
-CC       =  mpcc_r
-OPTIMIZE =  -g -O2 -qarch=pwr6 -qtune=pwr6 -qcpluscmt -qsuppress=1501-245 *.c
-GSL_INCL =  -I/cineca/prod/libraries/gsl/1.15/xlc--10.1/include
-GSL_LIBS =  -L/cineca/prod/libraries/gsl/1.15/xlc--10.1/lib
-FFTW_INCL=  -I/cineca/prod/libraries/fftw/2.1.5/xl--10.1/include
-FFTW_LIBS=  -L/cineca/prod/libraries/fftw/2.1.5/xl--10.1/lib
-MPICHLIB = 
-endif
-
-ifeq ($(SYSTYPE),"Dirac")
-CC       =  mpicc   
-OPTIMIZE =  -O3 -Wall
-GSL_INCL =  -I/usr/include
-GSL_LIBS =  -L/usr/lib64
-FFTW_INCL=  -I/usr/include
-FFTW_LIBS=  -L/usr/lib64
-endif
-
-ifeq ($(SYSTYPE),"HG1")
-CC       =  mpicc   
-OPTIMIZE =  -O3 -Wall
-GSL_INCL =  -I/opt/gsl/1.12/intel/include
-GSL_LIBS =  -L/opt/gsl/1.12/intel/lib
-FFTW_INCL=  -I/opt/fftw/3.2.2/intel/include
-FFTW_LIBS=  -L/opt/fftw/3.2.2/intel/lib
-endif
 
 ifeq ($(SYSTYPE),"MPA")
 CC       =  mpicc   
@@ -161,6 +109,7 @@ MPICHLIB =
 HDF5INCL =  
 HDF5LIB  =  -lhdf5 -lz 
 endif
+
 
 ifeq ($(SYSTYPE),"OpteronMPA")
 CC       =  mpicc   
@@ -259,7 +208,7 @@ endif
 
 OPTIONS =  $(OPTIMIZE) $(OPT)
 
-EXEC   = 2runGadget
+EXEC   = Gadget2
 
 OBJS   = main.o  run.o  predict.o begrun.o endrun.o global.o  \
 	 timestep.o  init.o restart.o  io.o    \
@@ -268,7 +217,7 @@ OBJS   = main.o  run.o  predict.o begrun.o endrun.o global.o  \
 	 gravtree.o hydra.o  driftfac.o  \
 	 domain.o  allvars.o potential.o  \
          forcetree.o   peano.o gravtree_forcetest.o \
-	 pm_periodic.o pm_nonperiodic.o longrange.o accrete_particles.o
+	 pm_periodic.o pm_nonperiodic.o longrange.o 
 
 INCL   = allvars.h  proto.h  tags.h  Makefile
 
@@ -277,17 +226,17 @@ CFLAGS = $(OPTIONS) $(GSL_INCL) $(FFTW_INCL) $(HDF5INCL)
 
 
 ifeq (NOTYPEPREFIX_FFTW,$(findstring NOTYPEPREFIX_FFTW,$(OPT)))    # fftw installed with type prefix?
-  FFTW_LIBR = $(FFTW_LIBS) -lrfftw_mpi -lfftw_mpi -lrfftw -lfftw
+  FFTW_LIB = $(FFTW_LIBS) -lrfftw_mpi -lfftw_mpi -lrfftw -lfftw
 else
 ifeq (DOUBLEPRECISION_FFTW,$(findstring DOUBLEPRECISION_FFTW,$(OPT)))
-  FFTW_LIBR = $(FFTW_LIBS) -ldrfftw_mpi -ldfftw_mpi -ldrfftw -ldfftw
+  FFTW_LIB = $(FFTW_LIBS) -ldrfftw_mpi -ldfftw_mpi -ldrfftw -ldfftw
 else
-  FFTW_LIBR = $(FFTW_LIBS) -lsrfftw_mpi -lsfftw_mpi -lsrfftw -lsfftw
+  FFTW_LIB = $(FFTW_LIBS) -lsrfftw_mpi -lsfftw_mpi -lsrfftw -lsfftw
 endif
 endif
 
 
-LIBS   =   $(HDF5LIB) -g  $(MPICHLIB)  $(GSL_LIBS) -lgsl -lgslcblas -lm $(FFTW_LIBR) 
+LIBS   =   $(HDF5LIB) -g  $(MPICHLIB)  $(GSL_LIBS) -lgsl -lgslcblas -lm $(FFTW_LIB) 
 
 $(EXEC): $(OBJS) 
 	$(CC) $(OBJS) $(LIBS)   -o  $(EXEC)  

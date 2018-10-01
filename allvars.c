@@ -14,10 +14,6 @@ int PTask;	        /*!< smallest integer such that NTask <= 2^PTask */
 
 int NumPart;		/*!< number of particles on the LOCAL processor */
 int N_gas;		/*!< number of gas particles on the LOCAL processor  */
-//Added by JM
-int flag_accretion_threshold; /*!< LOCAL flag. If set, domain decomposition will take place */
-int N0;		/*!< 'Original' number of particles on the LOCAL processor - it will change not after each accretion of a particle but after each domain decomposition. */
-//Added by JM
 long long Ntype[6];      /*!< total number of particles of each type */
 int NtypeLocal[6];       /*!< local number of particles of each type */
 
@@ -90,9 +86,7 @@ FILE *FdInfo;       /*!< file handle for info.txt log-file. */
 FILE *FdEnergy;     /*!< file handle for energy.txt log-file. */
 FILE *FdTimings;    /*!< file handle for timings.txt log-file. */
 FILE *FdCPU;        /*!< file handle for cpu.txt log-file. */
-//Added by JM
-FILE *FdAccretion;
-//End of Added by JM
+
 #ifdef FORCETEST
 FILE *FdForceTest;  /*!< file handle for forcetest.txt log-file. */
 #endif

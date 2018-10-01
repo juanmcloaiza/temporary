@@ -10,10 +10,6 @@
 #include <hdf5.h>
 #endif
 
-//Added by JM
-void   accrete_particles(void);
-void   jm_potential(void);
-//End of Added by JM
 void   advance_and_find_timesteps(void);
 void   allocate_commbuffers(void);
 void   allocate_memory(void);

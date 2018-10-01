@@ -26,7 +26,7 @@
                                   *   where TIMESPAN needs to be a power of 2. Note that (1<<28) corresponds to 2^29
                                   */
 
-#define  MAXTOPNODES     800000   /*!< Maximum number of nodes in the top-level tree used for domain decomposition */
+#define  MAXTOPNODES     200000   /*!< Maximum number of nodes in the top-level tree used for domain decomposition */
 
 
 typedef  long long  peanokey;    /*!< defines the variable type used for Peano-Hilbert keys */
@@ -49,10 +49,10 @@ typedef  long long  peanokey;    /*!< defines the variable type used for Peano-H
 #ifdef   ISOTHERM_EQS
 #define  GAMMA         (1.0)     /*!< index for isothermal gas */
 #else
-#define  GAMMA         (5.0/3.0)   /*!< adiabatic index of simulated gas */
+#define  GAMMA         (5.0/3)   /*!< adiabatic index of simulated gas */
 #endif
 
-#define  GAMMA_MINUS1  (GAMMA-1.0)
+#define  GAMMA_MINUS1  (GAMMA-1)
 
 #define  HYDROGEN_MASSFRAC 0.76  /*!< mass fraction of hydrogen, relevant only for radiative cooling */
 
@@ -132,10 +132,6 @@ extern int PTask;	        /*!< smallest integer such that NTask <= 2^PTask */
 
 extern int NumPart;		/*!< number of particles on the LOCAL processor */
 extern int N_gas;		/*!< number of gas particles on the LOCAL processor  */
-//Added by JM
-extern int flag_accretion_threshold; /*!< LOCAL flag. If set, domain decomposition will take place */
-extern int N0;		/*!< 'Original' number of particles on the LOCAL processor - it will change not after each accretion of a particle but after each domain decomposition. */
-//Added by JM
 extern long long Ntype[6];      /*!< total number of particles of each type */
 extern int NtypeLocal[6];       /*!< local number of particles of each type */
 
@@ -230,9 +226,7 @@ extern FILE *FdInfo;       /*!< file handle for info.txt log-file. */
 extern FILE *FdEnergy;     /*!< file handle for energy.txt log-file. */
 extern FILE *FdTimings;    /*!< file handle for timings.txt log-file. */
 extern FILE *FdCPU;        /*!< file handle for cpu.txt log-file. */
-//Added by JM
-extern FILE *FdAccretion;
-//End of Added by JM
+
 #ifdef FORCETEST
 extern FILE *FdForceTest;  /*!< file handle for forcetest.txt log-file. */
 #endif
@@ -256,9 +250,7 @@ extern struct global_data_all_processes
 {
   long long TotNumPart;		/*!< total particle numbers (global value) */
   long long TotN_gas;		/*!< total gas particle number (global value) */
-//Added by JM
-  int dom_dec_flag;         /*!< if set, domain decomposition takes place */
-//Added by JM
+
   int MaxPart;			/*!< This gives the maxmimum number of particles that can be stored on one processor. */
   int MaxPartSph;		/*!< This gives the maxmimum number of SPH particles that can be stored on one processor. */
 
